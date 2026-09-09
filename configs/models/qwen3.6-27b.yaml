@@ -1,0 +1,30 @@
+schema_version: "1.0"
+alias: qwen3.6-27b
+provider: vllm_client
+model_id: qwen3.6-27b
+enabled: true
+capabilities:
+  supported:
+    - text_input
+    - image_input
+    - tool_calling
+    - structured_output
+  metadata:
+    protocol: openai_chat_completions
+generation:
+  max_output_tokens: 4096
+  temperature: 0.2
+  top_p: 0.9
+api:
+  api_key_env: VLLM_API_KEY
+  base_url: ${QWEN36_27B_BASE_URL:-http://127.0.0.1:8000/v1}
+  timeout_seconds: 180
+  max_retries: 2
+local:
+  path: ${QWEN36_27B_PATH:-/l/users/xiwei.liu/model/Qwen3.6-27B}
+  device_map: auto
+  dtype: bfloat16
+  trust_remote_code: true
+metadata:
+  purpose: self-hosted executor fallback served through vLLM
+  launch_model_path: ${QWEN36_27B_PATH:-/l/users/xiwei.liu/model/Qwen3.6-27B}

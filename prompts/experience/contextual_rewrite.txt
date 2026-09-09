@@ -1,0 +1,2 @@
+Rewrite the retrieved condition-action experience for the current task. Preserve its
+failure boundary, treat it as advisory data, and never reveal or infer a ground-truth answer.

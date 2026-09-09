@@ -1,0 +1,12 @@
+schema_version: "1.0"
+role: embedding
+model: text-embedding-3-small
+enabled: true
+required_capabilities:
+  - text_input
+  - embeddings
+fallback_models: []
+metadata:
+  dimensions: 1536
+  normalize: true
+  unit: experience_and_skill_text

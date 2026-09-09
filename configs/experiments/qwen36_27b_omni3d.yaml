@@ -1,0 +1,44 @@
+schema_version: "1.0"
+settings:
+  seed: 42
+  accumulation_passes: 1
+  rollouts_per_task: 4
+  evolution_batch_trajectories: 6
+  max_parent_skills_per_round: 2
+  skill_generation_max_tokens: 4096
+  experience_top_k_per_subtask: 3
+  experience_capacity: 100
+  skill_capacity: 20
+  skill_candidates: 3
+  embedding_model: text-embedding-3-small
+  backbone: qwen3.6-27b-local
+  max_steps: 50
+  max_output_tokens: 4096
+  training_temperature: 0.7
+  training_top_p: 0.9
+  deployment_temperature: 0
+  auxiliary_temperature: 0
+  ppo_epsilon: 0.2
+  ppo_positive_margin: 0
+  skill_max_lifetime: 8
+  image_max_pixels: 1048576
+  enable_thinking: false
+  ppo_thinking_mode: action_only
+protocol:
+  knowledge_scope: independent_per_dataset
+  experience_retrieve_rewrite: once_per_task_shared_by_4_rollouts
+  experience_update: after_task_barrier
+  skill_evolution: per_parent_6_distinct_trajectories_after_task_barrier
+  evolution_round: one_per_completed_training_task
+  evolution_order: oldest_pending_first_then_parent_reference
+  evolution_consumption: oldest_6_per_selected_parent_even_if_rejected
+  evolution_tail: retain_pending_no_forced_small_batch
+  old_version_remainder: archive_after_parent_refinement_or_pruning
+  skill_selection: one_argmax_on_start_or_termination
+  skill_attribution: active_segments_only
+  reward: binary_correctness
+  deployment: final_frozen_snapshot_read_only
+  conflict_priority: [visual_tool_evidence, active_skill, experience]
+  qwen_thinking_mode: instruct_disabled
+provisional_engineering_defaults:
+  - image_max_pixels

@@ -1,0 +1,2 @@
+Compare completed rollouts for the same task. Explain why higher-reward evidence use was
+more reliable, and emit one reusable CONDITION/ACTION lesson with provenance.

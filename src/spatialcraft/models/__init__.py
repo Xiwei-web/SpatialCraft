@@ -1,0 +1,73 @@
+"""Provider-neutral model access for SpatialCraft."""
+
+from .capabilities import (
+    Capability,
+    ModelCapabilities,
+    required_capabilities,
+    validate_request_capabilities,
+)
+from .interfaces import (
+    ContentKind,
+    ContentPart,
+    GenerationSettings,
+    MessageRole,
+    ModelCapabilityError,
+    ModelConfigurationError,
+    ModelError,
+    ModelMessage,
+    ModelProvider,
+    ModelRequest,
+    ModelRequestError,
+    ModelResponse,
+    ModelResponseError,
+    ResponseToolCall,
+    SequenceScore,
+    TokenUsage,
+    ToolDefinition,
+)
+from .registry import (
+    APIConfig,
+    LocalModelConfig,
+    ModelConfig,
+    ModelRegistry,
+    ProviderKind,
+    RoleConfig,
+    RoleRegistry,
+)
+from .request_builder import RequestBuilder, build_request, with_generation
+from .response_parser import to_agent_action
+
+__all__ = [
+    "APIConfig",
+    "Capability",
+    "ContentKind",
+    "ContentPart",
+    "GenerationSettings",
+    "LocalModelConfig",
+    "MessageRole",
+    "ModelCapabilities",
+    "ModelCapabilityError",
+    "ModelConfig",
+    "ModelConfigurationError",
+    "ModelError",
+    "ModelMessage",
+    "ModelProvider",
+    "ModelRegistry",
+    "ModelRequest",
+    "ModelRequestError",
+    "ModelResponse",
+    "ModelResponseError",
+    "ProviderKind",
+    "RequestBuilder",
+    "ResponseToolCall",
+    "RoleConfig",
+    "RoleRegistry",
+    "SequenceScore",
+    "TokenUsage",
+    "ToolDefinition",
+    "build_request",
+    "required_capabilities",
+    "to_agent_action",
+    "validate_request_capabilities",
+    "with_generation",
+]

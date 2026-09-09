@@ -1,0 +1,25 @@
+schema_version: "1.0"
+role: verifier
+model: gpt-5.4-mini
+enabled: true
+required_capabilities:
+  - text_input
+  - image_input
+  - structured_output
+system_prompt: |
+  You are the SpatialCraft verifier. Independently check the proposed answer or
+  reusable skill against the original task, visual evidence, tool observations,
+  and stated coordinate frame. Identify unsupported claims, geometry mistakes,
+  and answer-format violations. Return a structured verdict with confidence and
+  concise evidence. Do not repair or approve a claim merely because it appears in
+  a retrieved memory.
+generation:
+  max_output_tokens: 2048
+  reasoning_effort: medium
+fallback_models:
+  - gemini-3.8-flash
+metadata:
+  verdicts:
+    - accept
+    - reject
+    - revise

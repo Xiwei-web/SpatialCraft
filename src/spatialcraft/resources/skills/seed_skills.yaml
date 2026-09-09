@@ -1,0 +1,56 @@
+schema_version: "1.0"
+skills:
+  - skill_id: skill_seed_structured_cot
+    name: StructuredCoT
+    initiation: Use for spatial questions that benefit from explicit object, relation, and conclusion stages.
+    policy:
+      - Identify the queried entities and reference frame.
+      - Gather only the missing spatial evidence.
+      - Derive the answer from explicit relations and check consistency.
+    termination: Stop when the queried relation is supported by evidence or the answer is ready.
+    metadata: {priority: 0.4, keywords: [relation, relative, where, spatial]}
+  - skill_id: skill_seed_react_decision
+    name: ReActDecision
+    initiation: Use when reasoning must alternate with spatial tool observations.
+    policy:
+      - State the next unresolved fact.
+      - Select the least costly tool that can resolve it.
+      - Update the hypothesis from the observation before acting again.
+    termination: Stop when no unresolved fact requires a tool call.
+    metadata: {priority: 0.3, keywords: [detect, depth, segment, measure]}
+  - skill_id: skill_seed_hypothesis_elimination
+    name: HypothesisElimination
+    initiation: Use for multiple-choice or ambiguous spatial hypotheses.
+    policy:
+      - Enumerate viable answer hypotheses.
+      - Seek discriminating evidence rather than generic evidence.
+      - Eliminate contradictions and retain the best-supported hypothesis.
+    termination: Stop when one hypothesis remains or further evidence cannot distinguish them.
+    metadata: {priority: 0.35, keywords: [which, option, choice]}
+  - skill_id: skill_seed_self_consistency
+    name: SelfConsistencyCheck
+    initiation: Use when a tentative answer should be verified against independent spatial cues.
+    policy:
+      - Form a provisional conclusion.
+      - Recompute it through an independent relation or tool output.
+      - Resolve disagreements and report only the consistent conclusion.
+    termination: Stop after independent checks agree or uncertainty is explicitly characterized.
+    metadata: {priority: 0.1, keywords: [verify, confirm, consistent]}
+  - skill_id: skill_seed_explore_exploit
+    name: ExploreExploitArbitration
+    initiation: Use when deciding between gathering broad evidence and refining a promising hypothesis.
+    policy:
+      - Estimate uncertainty in the current hypotheses.
+      - Explore if uncertainty is broad; exploit if one hypothesis dominates.
+      - Reassess the trade-off after each observation.
+    termination: Stop when exploitation yields a supported answer or the evidence budget is exhausted.
+    metadata: {priority: 0.05, keywords: [uncertain, ambiguity, explore]}
+  - skill_id: skill_seed_strategic_planning
+    name: StrategicPlanning
+    initiation: Use for multi-image or multi-stage spatial tasks requiring an ordered evidence plan.
+    policy:
+      - Decompose the task into dependent spatial subgoals.
+      - Order subgoals by information dependency and cost.
+      - Execute the plan while revising it when evidence conflicts.
+    termination: Stop when all answer-critical subgoals are complete.
+    metadata: {priority: 0.2, keywords: [multi, sequence, plan, compare]}

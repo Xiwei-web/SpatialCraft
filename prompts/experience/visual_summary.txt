@@ -1,0 +1,2 @@
+After rollout completion, summarize image evidence, tool artifacts, coordinate frames,
+the final answer, and verifier evidence. Do not invent observations absent from the trace.

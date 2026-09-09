@@ -1,0 +1,30 @@
+schema_version: "1.0"
+alias: qwen3.6-27b-local
+provider: transformers_local
+model_id: Qwen3.6-27B
+enabled: true
+capabilities:
+  supported:
+    - text_input
+    - image_input
+    - tool_calling
+    - fixed_target_scoring
+generation:
+  max_output_tokens: 4096
+  temperature: 0.7
+  top_p: 0.9
+local:
+  path: ${QWEN36_27B_PATH:-/l/users/xiwei.liu/model/Qwen3.6-27B}
+  device_map: auto
+  dtype: bfloat16
+  trust_remote_code: false
+  extra_load_kwargs:
+    max_memory:
+      0: 22GiB
+      cpu: 90GiB
+metadata:
+  purpose: Omni3D executor, knowledge builder and fixed-action PPO scorer
+  experiment_auto_placement: true
+  expected_gpus: 1
+  allow_cpu_offload: true
+  gpu_memory_policy: Single A100 40GB with BF16 CPU offload; reserve GPU headroom for spatial tools and visual activations; no disk offload.

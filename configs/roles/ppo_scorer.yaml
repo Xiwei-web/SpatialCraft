@@ -1,0 +1,12 @@
+schema_version: "1.0"
+role: ppo_scorer
+model: qwen3.5-9b
+enabled: true
+required_capabilities:
+  - text_input
+  - fixed_target_scoring
+fallback_models: []
+metadata:
+  objective: non_parametric_ppo
+  score: sum_and_mean_target_token_logprob
+  target: serialized_action_or_answer

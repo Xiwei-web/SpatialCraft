@@ -1,0 +1,141 @@
+# SpatialCraft 快速结构说明
+
+本文用于让新对话中的 Agent 快速了解 SpatialCraft 的代码、空间工具和数据集位置。
+
+源码策略更新（2026-09-09）：已实现用户要求的 **action_recovery_v2**。4096-token生成截断先检查完整action，无合法action时同step最多一次1024-token恢复，保留工具；只有50次工具交互耗尽后才追加一次512-token最终作答。Recovery不占工具步，失败记为明确模型失败；日志分别统计正常/恢复/最终调用及截断事件。153项完整回归和Omni3D离线初始化通过。正式/通用loop共用实现，PPO记录实际请求。**已提交冻结作业仍执行旧快照；新策略须独立运行，不能混用旧协议结果。** 详见 `docs/action_recovery_v2.md`。
+
+最新续跑（2026-09-09）：**220852 已提交，查询时 PENDING/Priority**，使用 `code_revisions/output_budget_v1` 和新入口 `scripts/inference/robospatial_budget.sbatch`。2×A100 40GB + FLA、96GB主机内存、48小时；115项实际快照适用回归通过。保留372条训练轨迹/92次Experience更新，从第93题Experience更新继续，采用4096-token超限后单次强制收尾策略。日志仍在原RoboSpatial运行目录，详细说明见 `docs/output_budget_recovery.md`。以下未重提/未切换说明为历史状态。
+
+输出超限策略更新（2026-09-09）：项目源码已加入 `force_completion_v1`：4096-token 超限后追加一次强制收尾，仍失败则标记并继续，不写入截断知识。详见 `docs/output_budget_recovery.md`。**本次未重提作业，旧冻结快照尚未切换**。220740 双 GPU/FLA 验证已通过；220741 在第 93 题 Experience 摘要输出超限退出，保留 372 条训练轨迹、92 次 Experience 更新，尚无最终测试成绩。以下排队状态为历史记录。
+
+最新状态（2026-09-09）：按用户要求准备 **FLA高效线性注意力 + 2×A100 40GB**。依赖隔离在 `/l/users/xiwei.liu/tool/env_overlays/qwen_fla_052`，不改共享conda；候选快照为原运行目录下 `code_revisions/fla_dual_v2`。110项完整回归及43项冻结快照关键测试通过；**双GPU实测尚未通过，作业220740正在等待资源**。正式续跑220741依赖其成功，失败则不启动。原368条轨迹/92次Experience更新保留，尚无完整测试成绩。最新启动、验证和断点说明：`docs/fla_dualgpu_20260909.md`；此前状态均为历史记录。
+
+Omni3D journal修复（2026-09-09）：**220630** 的GPU和27B推理验收通过，正式实验在保存整数GPU编号与字符串cpu混合键时发生JSON排序错误，尚无训练轨迹。已修复记录序列化，并将真实pipeline/journal创建、写入、重开加入离线检查，107项测试通过。新任务 **220679 已提交**：Qwen3.6-27B / thinking=false / 4096 tokens / 每题4 rollouts / 单pass，**1×A100 40GB + 128GB主机内存**，保留BF16+CPU卸载及上次卷积修复。独立运行目录与监控见 `docs/omni3d_27b_run.md`，本次说明见 `docs/omni3d_27b_journal_fix.md`。作业状态以Slurm为准。
+
+最新资源重提（2026-09-08）：217328在368条训练轨迹/92次Experience更新后，于第93题第1条rollout的第40步发生CUDA OOM。按用户要求提交 **218286**，仍用当前冻结快照 `json_output_v1` 和单张完整 **A100 40GB**，CPU内存64GB；启用 `PYTORCH_ALLOC_CONF=expandable_segments:True` 缓解碎片，未改实验超参数。集群可见GPU均为40GB单卡，每节点4卡合计160GB，不会自动合并。新作业状态以Slurm为准；历史状态如下。
+
+实时状态补充（2026-09-08 17:26）：作业 **217328 已在 gpu-04 正式续跑**，原JSON故障点已通过，后续演化模型调用持续落盘；恢复后再次校验28,371份旧JSON均未改写。完整测试尚未完成。
+
+当前实验（2026-09-08 17:23）：仅 RoboSpatial，Qwen3.5-9B **instruct / thinking=false**，单次输出与 Skill 生成均为 **4096 tokens**。检测框修复后作业215987已完成220条训练轨迹、55次Experience更新，随后在Skill语义梯度JSON解析处退出。本次受限语法修复通过实际响应回放及98项测试；新续跑作业 **217328** 已提交，初始排队，尚无完整成绩。目录：`/l/users/xiwei.liu/spatialcraftLog/runs/robospatial_qwen35_9b_instruct4096_v1`。入口 `scripts/inference/run_robospatial.sh` 根据 `robospatial/code_patch.json` 自动使用 `code_revisions/json_output_v1`，保留检测框修复；所有旧快照和已提交结果不改写。最新恢复说明：`docs/json_recovery_20260908.md`。作业状态以Slurm查询为准。
+
+## 1. 项目代码：`/home/xiwei.liu/spatialcraft`
+
+核心代码位于 `src/spatialcraft/`：
+
+- `schemas/`：统一数据结构，包括 `TaskSample`、Action、ToolResult、SpatialState、Trajectory、Experience、Skill 和 KnowledgeSnapshot。
+- `storage/`：原子文件写入、目录布局、manifest、checkpoint 和知识快照存储。
+- `models/`：统一模型接口及 OpenAI、Gemini、OpenAI-compatible、vLLM、本地 Transformers provider；`models/scoring/` 实现固定 Action 的严格 token log-prob 评分。
+- `datasets/`：RoboSpatial、ERQA、Omni3D、SAT、ViewSpatial 适配器，将原始样本统一转换为 `TaskSample`。
+- `verification/`：精确匹配、选择题、数值、空间关系及 LLM Judge，将 Agent 输出统一转换为 reward。
+- `tools/`：工具契约、注册与执行、Artifact Store、坐标系、mock 工具和真实空间工具适配器。
+- `agent/` 与 `rollout/`：多步 MLLM→工具→Observation→答案执行循环、Skill 生命周期、轨迹记录和批量 rollout。
+- `knowledge/experience/`：Experience 检索、改写、视觉总结、跨 rollout 批判、更新和合并。
+- `knowledge/skill/`：种子 Skill、选择与生命周期、credit、语义梯度、候选生成、lineage、剪枝和严格 NP-PPO Gate。
+- `knowledge/coordinator.py` 与 `pipelines/`：冻结 batch barrier、Experience/Skill 联合更新、原子 snapshot 提交和只读部署。
+- `evaluation/`：accuracy、pass@k、工具/Experience/Skill/效率/迁移指标，以及八类 baseline 和消融配置。
+- `experiments/`：三个 benchmark 的固定分层划分、公开输入/私有标签、完整 Qwen9 协议运行器和逐阶段断点日志；`python -m spatialcraft.experiments.run` 默认只做离线检查，`--execute` 才启用真实推理及付费 embedding。当前协议见 `docs/confirmed_protocol.md`。
+- `resources/skills/seed_skills.yaml`：六个初始程序化技能。
+
+其他重要目录：
+
+- `configs/models/`：五个 backbone 配置，以及 `text-embedding-3-small.yaml`；Experience/Skill 共用 OpenAI embedding，不回退到 Qwen embedding。
+- `configs/experiments/qwen35_9b_spatialcraft.yaml`：1 pass、每题 4 rollouts；每 parent 6 条相关 trajectory 后演化、每 task 屏障最多 2 parents；trajectory/Skill 上限50/8 steps、单次/候选输出4096 tokens、thinking=false（instruct）；PPO直接评分action tokens；top3、候选3、容量100/20。
+- 补充确认：训练 top_p=0.9、部署/辅助构建 temperature=0、PPO epsilon=0.2 与严格正收益 margin=0、旧版本剩余轨迹仅存档；当前仅 `image_max_pixels=1048576` 仍待确认。
+- `configs/roles/`：executor、knowledge builder、verifier、embedding、PPO scorer 角色配置。
+- `prompts/experience/`：Experience 分支提示词。
+- `scripts/data/`：benchmark 下载、检查和 SAT 300 条扩展脚本。
+- `tests/`：阶段 3–12、已确认协议、embedding、完整运行器接线与断点/冻结部署，以及 v2 的 per-parent FIFO 队列、fixed-thinking 评分、50/8-step 测试。最新结果见 `spatialcraftLog/validation/protocol-v2-20260907/`；单元测试不等同于真实全链路已通过。
+- `STATUS.md`：项目阶段完成状态。
+- 根目录 PDF：SpatialCraft 草稿及 XSkill、Skill-Pro、SMA 参考论文。
+
+最小使用环境：
+
+```bash
+conda activate spatialcraft
+cd /home/xiwei.liu/spatialcraft
+export PYTHONPATH=/home/xiwei.liu/spatialcraft/src
+pytest -q
+```
+
+## 2. 空间工具：`/l/users/xiwei.liu/tool`
+
+该目录约 28 GB，保存空间工具源码、模型权重和下载缓存：
+
+- `repos/`：GroundingDINO、SAM3、MoGe、Depth Anything 3、Orient Anything、EasyOCR 源码；也包含 XSkill 和 Skill-Pro 参考仓库。
+- `checkpoints/`：上述模型的本地权重，包括 GroundingDINO、SAM3、MoGe-2、DA3、OriNet/DINOv2 和 EasyOCR。
+- `algorithmic/`：无需大型模型的 Geometry、Mask、Graph、Draw、Farneback Motion 等算法工具目录。
+- `cache/`：Hugging Face、pip、Torch 和 EasyOCR 下载缓存；通常不应作为代码入口。
+- `manifests/`：工具准备状态或校验清单存放位置。
+
+SpatialCraft 当前注册的真实工具为：`detect`、`segment`、`mask`、`geometry`、`scale`、`reconstruct`、`pose`、`graph`、`motion`、`ocr`、`draw`。模型采用 lazy loading，创建 registry 时不会立即占用 GPU，首次调用对应工具时才加载权重。
+
+```python
+from spatialcraft.tools.real import create_real_tool_registry
+
+tools = create_real_tool_registry()
+print(tools.names())
+```
+
+代码默认使用 `/l/users/xiwei.liu/tool`；迁移目录时可设置：
+
+```bash
+export SPATIALCRAFT_TOOL_ROOT=/new/tool/path
+```
+
+## 3. Benchmark：`/l/users/xiwei.liu/benchmark`
+
+该目录约 4.9 GB，保存五个空间推理数据集及本地媒体缓存：
+
+- `RoboSpatial/`：`context`、`configuration`、`compatibility` 三类 Parquet；请求 `test` 时适配器会合并三类。
+- `ERQA/`：官方 test Parquet。
+- `Omni3D/`：Omni3D benchmark Parquet 和原始 `omni3d-bench.zip`；当前适配器统一暴露为 `test`。
+- `SAT/`：train、static、validation、test；默认 test 使用 `SAT_test_circular_300.parquet`。同时保留原始 150 条和其他备份文件。
+- `ViewSpatial/`：`ViewSpatial-Bench.json`，以及 `val2017.zip`、`scannetv2_val.zip` 图像资源。
+- 各数据集下的 `.spatialcraft/media/`：适配器解包或物化后的图像缓存；`.cache/` 是下载缓存。
+
+统一读取方式：
+
+```python
+from spatialcraft.datasets import create_default_registry
+
+registry = create_default_registry()  # 默认根目录即 /l/users/xiwei.liu/benchmark
+adapter = registry.create("sat")       # robospatial/erqa/omni3d/sat/viewspatial
+samples = adapter.load_split("test", limit=10)
+assert all(sample.dataset == "sat" for sample in samples)
+```
+
+如迁移 benchmark，可设置 `SPATIALCRAFT_BENCHMARK_ROOT`，或调用 `create_default_registry("/new/benchmark/path")`。后续 Agent 应通过这些适配器读取数据，不要直接假设不同原始数据集拥有相同字段。
+
+## 4. Backbone 权重：`/l/users/xiwei.liu/model`
+
+2026-09-07 下载的官方 post-trained 多模态 BF16 权重（不是 `-Base` 或量化变体）：
+
+| 模型 | 本地目录 | 官方仓库 | 文件总大小 |
+|---|---|---|---|
+| Qwen3.6-27B | `/l/users/xiwei.liu/model/Qwen3.6-27B` | `Qwen/Qwen3.6-27B` | 55.59 GB，15 个权重分片 |
+| Qwen3.5-9B | `/l/users/xiwei.liu/model/Qwen3.5-9B` | `Qwen/Qwen3.5-9B` | 19.33 GB，4 个权重分片 |
+
+每个目录包含 safetensors 权重、分片索引、模型配置、tokenizer、chat template、图像/视频 processor 配置、官方 README 与许可证。固定版本及续传命令见 `/l/users/xiwei.liu/model/README.md`。`.cache/huggingface/` 是下载元数据，不是模型入口。
+
+两个模型 YAML 的默认路径已对齐这里的 `model/`（不是 `models/`）。可显式覆盖：
+
+```bash
+export QWEN36_27B_PATH=/l/users/xiwei.liu/model/Qwen3.6-27B
+export QWEN35_9B_PATH=/l/users/xiwei.liu/model/Qwen3.5-9B
+```
+
+2026-09-07 已升级当前 `spatialcraft` 环境：PyTorch 2.10.0 / CUDA 12.8、Transformers 5.5.4、vLLM 0.19.1、Accelerate 1.12.0。两个模型的配置与视觉预处理检查均通过；9B 已在分配的 A100 40GB 上分别通过 Transformers 和 vLLM 的真实 BF16 图片问答。27B 尚未验证完整 GPU 推理，需至少双 40GB 或单 80GB 卡并为 KV cache 留余量。本次没有保留后台模型服务。
+
+依赖版本见 `requirements/inference-cu128.txt`；使用和验证记录见 `docs/inference_environment.md`。`scripts/inference/smoke_qwen.py` 提供离线及 GPU 验证，`scripts/inference/serve_qwen.sh` 提供仅监听本机的 Slurm 内 vLLM 启动方式。当前 27B 配置选择 `vllm_client`，需要先启动服务并设置 `QWEN36_27B_BASE_URL`；9B 配置仍选择 `transformers_local`。环境级验证不等于项目 provider 的多模态/工具调用/PPO 链路已全部通过验证。
+
+升级前完整环境备份：`/l/users/xiwei.liu/env_backups/spatialcraft-before-qwen-20260907`，可按路径激活。现有 Python/Notebook 进程需重启以加载新版依赖。`pip check` 仅剩升级前已有的 TextWorld 平台提示。
+
+## 5. 实验日志：`/l/users/xiwei.liu/spatialcraftLog`
+
+Qwen3.5-9B 的 RoboSpatial → ERQA → Omni3D 实验准备说明见 `docs/qwen35_three_benchmarks.md`。
+`preparation/qwen35_9b_seed42_v1/` 保存 175/175、200/200、251/250 的固定划分、评估专用标签和来源哈希；
+`smoke/qwen35_9b_provider_v2/` 保存真实 provider 的少量调用及断点验证记录。
+**目前没有正式三数据集 SpatialCraft 分数，也没有生成的实验 skill/experience。**
+本轮已接通知识 builder、多模态 NP-PPO、工具反馈和严格协议运行器；新 thinking 协议验证见 `validation/protocol-v2-20260907/`，旧 nonthinking 验证保留在 `validation/protocol-20260907/`。
+待用户设置 key 后再做真实 embedding/空间工具组合的小规模验收；未宣称全量实验通过。正式执行将写入 `runs/qwen35_9b_protocol_v2/{robospatial,erqa,omni3d}/`，共享 embedding 缓存位于该 run 根目录的 `embedding_cache/`；各 benchmark 的 `skills/round-*.json` 和 `checkpoints/pending_evolution.json` 保存演化队列及消费审计。
+恢复使用同一个 `experiments.run --execute --output ...` 命令；变更代码/配置/权重/依赖需新版本目录。协议、暂定参数和完整日志索引见 `docs/confirmed_protocol.md`。

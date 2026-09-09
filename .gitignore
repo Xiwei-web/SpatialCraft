@@ -1,0 +1,31 @@
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Local environments and credentials
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Test and coverage output
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+/output-budget-tests.xml
+
+# Local reference papers and manuscript PDFs
+/*.pdf
+
+# Editor and operating-system files
+.DS_Store

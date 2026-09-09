@@ -1,0 +1,2 @@
+Decompose the spatial task into concise retrieval queries. Do not answer the task and
+do not infer missing observations. Return one query per line.

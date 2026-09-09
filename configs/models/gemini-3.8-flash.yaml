@@ -1,0 +1,26 @@
+schema_version: "1.0"
+alias: gemini-3.8-flash
+provider: gemini_native
+model_id: gemini-3.8-flash
+enabled: true
+capabilities:
+  supported:
+    - text_input
+    - image_input
+    - audio_input
+    - video_input
+    - tool_calling
+    - structured_output
+    - reasoning
+  metadata:
+    protocol: google_genai
+generation:
+  max_output_tokens: 8192
+  reasoning_effort: low
+api:
+  api_key_env: GEMINI_API_KEY
+  base_url_env: GEMINI_BASE_URL
+  timeout_seconds: 180
+  max_retries: 3
+metadata:
+  purpose: native multimodal execution and verification fallback

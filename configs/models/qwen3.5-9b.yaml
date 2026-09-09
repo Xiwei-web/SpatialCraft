@@ -1,0 +1,25 @@
+schema_version: "1.0"
+alias: qwen3.5-9b
+provider: transformers_local
+model_id: qwen3.5-9b
+enabled: true
+capabilities:
+  supported:
+    - text_input
+    - image_input
+    - tool_calling
+    - fixed_target_scoring
+    - embeddings
+  metadata:
+    embedding_strategy: normalized_last_hidden_state_mean
+generation:
+  max_output_tokens: 4096
+  temperature: 0.7
+  top_p: 0.9
+local:
+  path: ${QWEN35_9B_PATH:-/l/users/xiwei.liu/model/Qwen3.5-9B}
+  device_map: auto
+  dtype: bfloat16
+  trust_remote_code: true
+metadata:
+  purpose: local executor and fixed-action PPO scoring; experiment retrieval uses text-embedding-3-small
