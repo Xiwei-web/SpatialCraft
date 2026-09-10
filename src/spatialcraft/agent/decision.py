@@ -32,8 +32,8 @@ def recovery_request(request, *, forced_final=False):
     else:
         instruction = (
             "The previous generation hit its output limit without a complete valid action. "
-            "Recover the CURRENT step using the existing images, tool observations, Experience "
-            "and active Skill. Do not restart or repeat reasoning. Output exactly ONE complete "
+            "Recover the CURRENT step using the existing images, tool observations and current context. "
+            "Do not restart or repeat reasoning. Output exactly ONE complete "
             "legal tool call, or 'Final Answer: ...' ONLY if current evidence is sufficient. "
             "You may gather more evidence; you are not required to finish the task now."
         )

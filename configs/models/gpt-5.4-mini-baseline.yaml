@@ -1,0 +1,20 @@
+schema_version: '1.0'
+alias: gpt-5.4-mini
+provider: openai_responses
+model_id: gpt-5.4-mini
+enabled: true
+capabilities:
+  supported: [text_input, image_input, reasoning]
+generation:
+  max_output_tokens: 4096
+  reasoning_effort: none
+  temperature: 0
+  extra:
+    store: false
+api:
+  api_key_env: OPENAI_API_KEY
+  base_url: https://api.openai.com/v1
+  timeout_seconds: 180
+  max_retries: 3
+metadata:
+  purpose: direct visual baseline, one response per held-out task

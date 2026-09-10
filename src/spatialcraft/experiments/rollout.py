@@ -43,7 +43,7 @@ class JournaledRollout:
         prefix: str,
         initial_state: SpatialState,
         rollout_index: int,
-        random_seed: int,
+        random_seed: int | None,
     ) -> Trajectory:
         loop = self.loop
         initial, _ = self.journal.execute(
@@ -82,12 +82,14 @@ class JournaledRollout:
                 )
                 state = SpatialState.from_dict(selected)
             request = loop.composer.compose(safe_task, state)
-            request = replace(
-                request,
-                settings=replace(
-                    request.settings, seed=(random_seed * 100003 + step) % (2**63 - 1)
-                ),
-            )
+            if random_seed is not None:
+                request = replace(
+                    request,
+                    settings=replace(
+                        request.settings,
+                        seed=(random_seed * 100003 + step) % (2**63 - 1),
+                    ),
+                )
 
             def generate(kind, current, key=key):
                 call_key = (

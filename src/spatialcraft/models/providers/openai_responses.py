@@ -99,7 +99,17 @@ class OpenAIResponsesProvider(ModelProvider):
                     }
                 )
                 continue
-            content = [self._content_part(part) for part in message.content]
+            if message.role is MessageRole.ASSISTANT:
+                if any(part.kind is not ContentKind.TEXT for part in message.content):
+                    raise ModelRequestError(
+                        "Assistant history must contain output text"
+                    )
+                content = [
+                    {"type": "output_text", "text": part.text, "annotations": []}
+                    for part in message.content
+                ]
+            else:
+                content = [self._content_part(part) for part in message.content]
             if content:
                 inputs.append(
                     {

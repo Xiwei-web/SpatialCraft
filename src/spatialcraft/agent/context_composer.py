@@ -30,6 +30,7 @@ class ContextComposer:
         system_prompt: str | None = None,
         artifact_resolver=None,
         include_empty_skill_slot: bool = False,
+        use_knowledge: bool = True,
     ) -> None:
         self.model = model
         self.tools = tools
@@ -37,10 +38,18 @@ class ContextComposer:
         self.system_prompt = system_prompt
         self.artifact_resolver = artifact_resolver
         self.include_empty_skill_slot = include_empty_skill_slot
+        self.use_knowledge = use_knowledge
 
     def compose(self, task: TaskSample, state: SpatialState) -> ModelRequest:
         if state.task_id != task.task_id:
             raise ValueError("state and task ids do not match")
+        if not self.use_knowledge and (
+            state.retrieved_experiences
+            or state.active_skill is not None
+            or state.metadata.get("active_skill_prompt")
+            or self.include_empty_skill_slot
+        ):
+            raise ValueError("Tool-only context cannot contain Experience or Skill")
         builder = RequestBuilder(
             self.model,
             role=self.role,
@@ -52,8 +61,12 @@ class ContextComposer:
             "At each interaction step, emit exactly ONE next tool call or, when evidence is sufficient, "
             "a final answer. Keep any reasoning concise; avoid repetition and planning the entire trajectory. "
             "Use 'Final Answer: ...' for the final answer. The output token cap applies only to this call. "
-            "Conflict priority: current visual observations and tool evidence > active procedural Skill > retrieved Experience. "
-            "Use the Skill as the main procedure and Experiences as conditional local corrections. Never replace observations with memory claims."
+            + (
+                "Conflict priority: current visual observations and tool evidence > active procedural Skill > retrieved Experience. "
+                "Use the Skill as the main procedure and Experiences as conditional local corrections. Never replace observations with memory claims."
+                if self.use_knowledge
+                else "Use current images and tool observations as evidence."
+            )
         )
         if state.retrieved_experiences:
             experience_text = "\n\n".join(

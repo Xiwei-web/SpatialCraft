@@ -2,6 +2,18 @@
 
 本文用于让新对话中的 Agent 快速了解 SpatialCraft 的代码、空间工具和数据集位置。
 
+Tool-only ReAct baseline（2026-09-10）：已提交 **227082**，gpt-5.4-mini / reasoning=none / temperature=0 / 每次4096 tokens。复用纯模型baseline同一925题（RoboSpatial175、ERQA200、Omni3D250、SAT300），每题一条多步trajectory、单pass，使用项目11个真实空间工具，无Experience/Skill/embedding/PPO。50次工具交互上限、单step最多一次1024-token恢复、步数耗尽512-token最终作答。单张A100 40GB，四数据集依次执行。运行 `spatialcraftLog/runs/gpt54mini_tool_react_baseline_20260910_v1`；最终 `{dataset}/results/deployment.json`、汇总 `results/summary.json`、实时 `{dataset}/progress.json`。202项完整回归、最终63项针对性回归、真实API工具往返及六个重型GPU工具验收通过。详见 `docs/gpt54mini_tool_react_baseline_20260910.md`；实时状态以Slurm为准。
+
+ViewSpatial GPT-5.4 baseline（2026-09-10）：已提交 **227000**，仅复用固定deployment的 **2856题**，gpt-5.4 / reasoning=none / temperature=0 / 4096 tokens / 单轮每题一次，无工具/E/K。输入与mini任务226866逐字节一致，seed42的既有50/50划分保持不变。独立运行 `spatialcraftLog/runs/gpt54_viewspatial_deployment2856_seed42_20260910_v1`；最终accuracy见 `viewspatial/results/deployment.json`，实时见 `viewspatial/progress.json`。启动配置和冻结输入检查通过，详见 `docs/viewspatial_gpt54_deployment_baseline_20260910.md`；状态以Slurm为准。
+
+ViewSpatial 半集 baseline（2026-09-10）：已提交 **226866**，gpt-5.4-mini / reasoning=none / temperature=0 / 4096 tokens / 单轮每题一次，无工具/E/K。按question_type分类内50/50、seed42、奇数余项environment优先交替分配，5712题得到environment/deployment各2856题；**本次只评测deployment的2856题**。共享划分 `spatialcraftLog/preparation/viewspatial_seed42_v1`；运行 `spatialcraftLog/runs/gpt54mini_viewspatial_deployment2856_seed42_20260910_v1`，结果 `viewspatial/results/deployment.json`。48项回归、全部请求校验、32图API验收通过。5712/2856为题目记录数，多图题保留全部视图。详见 `docs/viewspatial_mini_deployment_baseline_20260910.md`，实时状态以Slurm为准。
+
+GPT-5.4 baseline（2026-09-10）：已提交三轮 **226631/226632/226633**，自动汇总 **226634** 依赖三轮成功。gpt-5.4 / reasoning=none / temperature=0 / 4096 tokens / 每题一次；每轮同一925题（RoboSpatial175、ERQA200、Omni3D250、SAT300），无工具/E/K，合计2775次。独立目录 `spatialcraftLog/runs/gpt54_direct_baseline_20260910_three_runs_v1`，单轮 `runN/{dataset}/results/deployment.json`，三轮 `results/accuracy_mean_std.{json,csv,md}`（样本std，ddof=1，另存variance）。33项回归、冻结preflight及真实gpt-5.4多图API验收通过。详见 `docs/gpt54_three_runs_20260910.md`；状态以Slurm/文件为准。
+
+GPT baseline 三轮评测（2026-09-10）：首轮 **226209已完成**，RoboSpatial/ERQA/Omni3D/SAT准确率为52.57%/34.50%/22.40%/57.67%。新复跑 **226421（rep43）**、**226422（rep44）**，自动汇总 **226423** 依赖两者成功；同一925题、首轮冻结代码、reasoning=none、temperature=0、4096 tokens。**Responses API不支持生成seed，43/44仅作独立复跑标识，不声称控制了模型随机种子。** 结果在 `spatialcraftLog/runs/gpt54mini_direct_baseline_20260910_repeats_v1/results/accuracy_mean_std.{json,csv,md}`，std用样本标准差ddof=1，另存variance。详见 `docs/gpt54mini_three_runs_20260910.md`。后续状态以Slurm/结果文件为准；下文首轮运行中说明为历史记录。
+
+纯 GPT baseline（2026-09-10）：已提交 **226209**，启动于 CPU 节点 cn-03。gpt-5.4-mini / reasoning=none / 4096 tokens / 每题一次，无工具、Experience、Skill；RoboSpatial 175、ERQA 200、Omni3D 250、SAT 300，共925题。独立运行目录 `spatialcraftLog/runs/gpt54mini_direct_baseline_20260910_v1`；实时 `{dataset}/progress.json`，完整结果 `{dataset}/results/deployment.json` 与 `results/summary.json`。8项关键回归、全部请求检查及真实16图API验收通过。详见 `docs/gpt54mini_baseline_20260910.md`。当前状态以 Slurm/结果文件为准。
+
 源码策略更新（2026-09-09）：已实现用户要求的 **action_recovery_v2**。4096-token生成截断先检查完整action，无合法action时同step最多一次1024-token恢复，保留工具；只有50次工具交互耗尽后才追加一次512-token最终作答。Recovery不占工具步，失败记为明确模型失败；日志分别统计正常/恢复/最终调用及截断事件。153项完整回归和Omni3D离线初始化通过。正式/通用loop共用实现，PPO记录实际请求。**已提交冻结作业仍执行旧快照；新策略须独立运行，不能混用旧协议结果。** 详见 `docs/action_recovery_v2.md`。
 
 最新续跑（2026-09-09）：**220852 已提交，查询时 PENDING/Priority**，使用 `code_revisions/output_budget_v1` 和新入口 `scripts/inference/robospatial_budget.sbatch`。2×A100 40GB + FLA、96GB主机内存、48小时；115项实际快照适用回归通过。保留372条训练轨迹/92次Experience更新，从第93题Experience更新继续，采用4096-token超限后单次强制收尾策略。日志仍在原RoboSpatial运行目录，详细说明见 `docs/output_budget_recovery.md`。以下未重提/未切换说明为历史状态。
