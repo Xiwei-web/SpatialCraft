@@ -16,6 +16,11 @@ from spatialcraft.storage.atomic_io import atomic_write_json
 from .journal import digest
 
 
+def _elapsed(started):
+    elapsed = (perf_counter() - started) * 1000
+    return {"latency_ms": elapsed, "full_call_latency_ms": elapsed}
+
+
 class UsageLedger:
     def __init__(self, root):
         self.root = root
@@ -77,6 +82,12 @@ class AuditedProviderV2(ModelProvider):
                 "requested_top_p": request.settings.top_p
                 if kind == "generation"
                 else None,
+                **(
+                    self.provider.parameter_audit(request)
+                    if kind == "generation"
+                    and callable(getattr(self.provider, "parameter_audit", None))
+                    else {}
+                ),
                 "template_sha256": request.metadata.get("template_sha256"),
                 "client_retries": 0,
             }
@@ -101,7 +112,7 @@ class AuditedProviderV2(ModelProvider):
                         "input_tokens": None,
                         "output_tokens": None,
                         "total_tokens": None,
-                        "latency_ms": (perf_counter() - started) * 1000,
+                        **_elapsed(started),
                     }
                 )
                 raise
@@ -114,9 +125,21 @@ class AuditedProviderV2(ModelProvider):
                     **asdict(response.usage),
                     "response_id": response.response_id,
                     "finish_reason": response.finish_reason,
-                    "latency_ms": response.latency_ms
-                    if response.latency_ms is not None
-                    else (perf_counter() - started) * 1000,
+                    "provider_latency_ms": response.latency_ms,
+                    "server_model": response.raw.get("model")
+                    if isinstance(response.raw, dict)
+                    else None,
+                    "server_model_version": (
+                        response.raw.get(
+                            "model_version", response.raw.get("modelVersion")
+                        )
+                        if isinstance(response.raw, dict)
+                        else None
+                    ),
+                    "server_system_fingerprint": response.raw.get("system_fingerprint")
+                    if isinstance(response.raw, dict)
+                    else None,
+                    **_elapsed(started),
                 }
             )
             return response_to_dict(response)
@@ -135,6 +158,7 @@ class AuditedProviderV2(ModelProvider):
                     "output_tokens": 0,
                     "total_tokens": 0,
                     "latency_ms": 0,
+                    "full_call_latency_ms": 0,
                     "source_response_id": result.get("response_id"),
                 }
             )
@@ -162,7 +186,7 @@ class AuditedProviderV2(ModelProvider):
                         "input_tokens": None,
                         "target_tokens": None,
                         "output_tokens": 0,
-                        "latency_ms": (perf_counter() - started) * 1000,
+                        **_elapsed(started),
                     }
                 )
                 raise
@@ -175,7 +199,7 @@ class AuditedProviderV2(ModelProvider):
                     "input_tokens": response.prompt_token_count,
                     "target_tokens": len(response.token_ids),
                     "output_tokens": 0,
-                    "latency_ms": (perf_counter() - started) * 1000,
+                    **_elapsed(started),
                 }
             )
             return asdict(response)
@@ -194,6 +218,7 @@ class AuditedProviderV2(ModelProvider):
                     "target_tokens": 0,
                     "output_tokens": 0,
                     "latency_ms": 0,
+                    "full_call_latency_ms": 0,
                 }
             )
         return SequenceScore(**result)
@@ -226,7 +251,7 @@ class ScopedEmbedder:
                     "error_type": type(exc).__name__,
                     "input_tokens": None,
                     "requests": None,
-                    "latency_ms": (perf_counter() - started) * 1000,
+                    **_elapsed(started),
                 }
             )
             raise
@@ -242,7 +267,7 @@ class ScopedEmbedder:
                 "requests": after["requests"] - before["requests"],
                 "cache_hits": after["cache_hits"] - before["cache_hits"],
                 "texts": len(texts),
-                "latency_ms": (perf_counter() - started) * 1000,
+                **_elapsed(started),
             }
         )
         return values

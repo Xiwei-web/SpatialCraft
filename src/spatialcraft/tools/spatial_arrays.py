@@ -30,6 +30,62 @@ def read_bundle(uri: str) -> dict[str, Any]:
         return {key: archive[key] for key in archive.files}
 
 
+def bundle_scalar(bundle: dict[str, Any], key: str, default: str = "") -> str:
+    """Read scalar contract metadata without silently flattening malformed arrays."""
+    if key not in bundle:
+        return default
+    value = bundle[key]
+    if value.shape != ():
+        raise ToolSchemaError(f"artifact metadata {key} must be a scalar")
+    return str(value.item())
+
+
+def point_set(uri: str, dimension: int = 3) -> tuple[Any, dict[str, Any]]:
+    """Read finite point sets; invalid projected pixels require explicit selection."""
+    import numpy as np
+
+    bundle = read_bundle(uri)
+    key = "pixels" if dimension == 2 and "pixels" in bundle else "points"
+    values = np.asarray(bundle.get(key, ()), dtype=float)
+    if values.ndim != 2 or values.shape[1] != dimension:
+        raise ToolSchemaError(f"points_uri must contain an Nx{dimension} point set")
+    if not np.isfinite(values).all() or (
+        "valid" in bundle and not bundle["valid"].all()
+    ):
+        raise ToolSchemaError(
+            "points artifact contains invalid points; select valid points explicitly"
+        )
+    return values, bundle
+
+
+def pixel_mapping(value: Any) -> Any:
+    import numpy as np
+
+    matrix = np.asarray(value, dtype=float)
+    if (
+        matrix.shape != (3, 3)
+        or not np.isfinite(matrix).all()
+        or not np.allclose(matrix[2], [0, 0, 1])
+        or abs(np.linalg.det(matrix)) < 1e-12
+    ):
+        raise ToolSchemaError(
+            "source_to_processed must be a finite invertible affine 3x3 pixel mapping"
+        )
+    return matrix
+
+
+def map_pixels(points: Any, source_to_processed: Any, *, inverse: bool = False) -> Any:
+    """Map integer-pixel-center coordinates using the recorded resize/crop map."""
+    import numpy as np
+
+    matrix = pixel_mapping(source_to_processed)
+    if inverse:
+        matrix = np.linalg.inv(matrix)
+    values = np.asarray(points, dtype=float)
+    homogeneous = np.column_stack((values, np.ones(len(values)))) @ matrix.T
+    return homogeneous[:, :2] / homogeneous[:, 2:3]
+
+
 def se3(value: Any) -> Any:
     import numpy as np
 

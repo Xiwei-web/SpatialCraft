@@ -286,3 +286,46 @@ def test_transfer_cli_preflight_does_not_construct_execution_runtime(
     assert called == [["robospatial"]]
     assert not (tmp_path / "target").exists()
     assert "preflight_passed_not_run" in capsys.readouterr().out
+
+
+def test_strict_source_binding_rejects_same_public_task_under_different_id(tmp_path):
+    from spatialcraft.experiments.prepare_v2 import (
+        CONTENT_FINGERPRINT,
+        EXACT_DUPLICATE_POLICY,
+        public_content_fingerprints,
+    )
+    from spatialcraft.schemas import TaskSample
+
+    source_path = tmp_path / "source"
+    source_journal(source_path)
+    source_task = TaskSample(
+        task_id="source-train",
+        dataset="robospatial",
+        question="Same public question",
+        choices=("A", "B"),
+    )
+    manifest = read_json(source_path / "journal.json")
+    old_binding = manifest["binding_sha256"]
+    manifest["binding"]["content_isolation"] = {
+        "robospatial": {
+            "policy": EXACT_DUPLICATE_POLICY,
+            "fingerprint": CONTENT_FINGERPRINT,
+            "training_task_content_sha256": public_content_fingerprints((source_task,)),
+        }
+    }
+    from spatialcraft.experiments.journal import digest
+
+    manifest["binding_sha256"] = digest(manifest["binding"])
+    atomic_write_json(source_path / "journal.json", manifest)
+    for path in (source_path / "stages").rglob("*.json"):
+        value = read_json(path)
+        if value.get("binding_sha256") == old_binding:
+            value["binding_sha256"] = manifest["binding_sha256"]
+            atomic_write_json(path, value)
+    source = read_frozen_source(source_path)
+    heldout = replace(source_task, task_id="brand-new-id", split=TaskSplit.TEST)
+    with pytest.raises(ValueError, match="exact public task content overlaps"):
+        validate_target_tasks(source, (heldout,))
+    validate_target_tasks(
+        source, (replace(heldout, question="Different public question"),)
+    )

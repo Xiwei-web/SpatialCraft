@@ -12,6 +12,12 @@ from hashlib import sha256
 
 from spatialcraft.experiments.evolution_queue import RelatedEvolutionQueue
 from spatialcraft.experiments.journal import digest
+from spatialcraft.knowledge.evidence import (
+    render_action,
+    render_state_evidence,
+    render_tool_result,
+    render_transition,
+)
 from spatialcraft.knowledge.experience.index import _normalize
 from spatialcraft.models import ContentPart
 from spatialcraft.models.serialization import request_from_dict
@@ -61,12 +67,130 @@ class SkillLearningV2:
         if token_counter is None:
             raise ValueError("Skill v2 needs the declared executor tokenizer")
 
-    def _media(self, segment):
+    def _entry_context(self, row, segment):
+        """Follow prior artifact producers without assigning their actions credit."""
+        entry = segment.transitions[0].state_before
+        prior = [
+            (transition, result)
+            for transition in row.transitions[: segment.start_step]
+            for result in transition.tool_results
+        ]
+
+        def strings(value):
+            if isinstance(value, str):
+                return {value}
+            if isinstance(value, dict):
+                return (
+                    set().union(*(strings(v) for v in value.values()))
+                    if value
+                    else set()
+                )
+            if isinstance(value, (tuple, list)):
+                return set().union(*(strings(v) for v in value)) if value else set()
+            return set()
+
+        required = set().union(
+            *(
+                strings(call.arguments)
+                for transition in segment.transitions
+                for call in transition.action.tool_calls
+            )
+        )
+        selected = {}
+        changed = True
+        while changed:
+            changed = False
+            for transition, result in prior:
+                references = {
+                    ref
+                    for artifact in result.artifacts
+                    for ref in (artifact.uri, artifact.artifact_id)
+                }
+                if result.result_id in selected or not references & required:
+                    continue
+                selected[result.result_id] = (transition, result)
+                # Include transitive inputs to the selected producer, never raw
+                # provider requests or arbitrary earlier assistant reasoning.
+                for call in transition.action.tool_calls:
+                    if call.call_id == result.tool_call_id:
+                        required.update(strings(call.arguments))
+                required.update(strings(result.structured_output))
+                for artifact in result.artifacts:
+                    required.update(strings(artifact.metadata))
+                changed = True
+        messages = [m for m in entry.messages if m.role.value == "tool"]
+        if selected:
+            messages = [
+                m
+                for m in messages
+                if m.metadata.get("result_id") in selected
+                or bool(set(m.artifact_ids) & required)
+            ]
+            selection = "transitive_artifact_dependencies"
+        else:
+            # Final/numeric actions may not name an artifact. Retain a bounded
+            # recent observation context instead of silently discarding it all.
+            messages = messages[-2:]
+            selection = "last_two_tool_observations_without_named_prior_dependency"
+        source_ids = set(selected) | {m.metadata.get("result_id") for m in messages}
+        evidence = tuple(
+            e
+            for e in entry.evidence
+            if e.source_tool_result_id in source_ids
+            or bool(set(e.artifact_ids) & required)
+        )
+        if not selected and not evidence:
+            evidence = entry.evidence[-2:]
+        visible_entry = replace(entry, messages=tuple(messages), evidence=evidence)
+        prerequisites = [
+            {
+                "transition_id": transition.transition_id,
+                "step_index": transition.step_index,
+                "action": render_action(transition.action),
+                "tool_result": render_tool_result(result),
+            }
+            for transition, result in sorted(
+                selected.values(), key=lambda item: item[0].step_index
+            )
+        ]
+        images = []
+        for item in prerequisites:
+            for artifact in item["tool_result"]["artifacts"]:
+                images.append((f"prerequisite {item['transition_id']}", artifact))
+        context = render_state_evidence(visible_entry)
+        for observation in context["tool_observations"]:
+            content = observation["observation"]
+            if isinstance(content, dict):
+                for artifact in content.get("artifacts", ()):
+                    images.append(("entry-state observation", artifact))
+        context["selection_policy"] = selection
+        context["omitted_prior_tool_observations"] = sum(
+            m.role.value == "tool" for m in entry.messages
+        ) - len(messages)
+        context["attribution_scope"] = (
+            "context_only; prerequisite actions are excluded from relevance evidence_refs, quality statistics and scoring"
+        )
+        return context, prerequisites, images
+
+    def _media(self, segment, prerequisite_images=()):
         media, seen = [], set()
         for image in segment.task.images:
             media.append(ContentPart.text_part(f"Original task image: {image.uri}"))
             media.append(ContentPart.image_uri(image.uri, mime_type=image.media_type))
             seen.add(image.uri)
+        for label, artifact in prerequisite_images:
+            if str(artifact.get("mime_type") or "").startswith("image/"):
+                uri = str(self.resolve(artifact["uri"]))
+                if uri not in seen:
+                    media.append(
+                        ContentPart.text_part(
+                            f"Context-only {label} image: {artifact['uri']}"
+                        )
+                    )
+                    media.append(
+                        ContentPart.image_uri(uri, mime_type=artifact["mime_type"])
+                    )
+                    seen.add(uri)
         for transition in segment.transitions:
             for result in transition.tool_results:
                 for artifact in result.artifacts:
@@ -133,8 +257,11 @@ class SkillLearningV2:
                 raise ValueError("A related change requires a component update")
             return value
 
+        entry_state, prerequisites, prerequisite_images = self._entry_context(
+            row, segment
+        )
         payload = {
-            "instructions": "Diagnose ONLY the supplied activation segment. Judge whether the Skill could affect the observed result; execution alone is not relevance, and association is not causal proof. Preserve successful components. Return no_change=true when no supported change exists. For actual NONE, compare the technical need with ALL existing Skills; set needs_new_skill only if uncovered. Reuse an existing discovery bucket key when the same need recurs. Never treat an unrelated active Skill as NONE.",
+            "instructions": "Use entry_state and prerequisite_evidence only to understand preconditions and artifact dependencies. Their earlier actions are NOT eligible evidence_refs and receive no credit. Diagnose ONLY the supplied activation segment. Judge whether the Skill could affect the observed result; execution alone is not relevance, and association is not causal proof. Preserve successful components. Return no_change=true when no supported change exists. For actual NONE, compare the technical need with ALL existing Skills; set needs_new_skill only if uncovered. Reuse an existing discovery bucket key when the same need recurs. Never treat an unrelated active Skill as NONE.",
             "expected_output": {
                 "is_related": "boolean",
                 "no_change": "boolean",
@@ -164,12 +291,13 @@ class SkillLearningV2:
             else {},
             "segment_start": segment.start_step,
             "segment_end": segment.end_step,
+            "entry_state": entry_state,
+            "prerequisite_evidence": prerequisites,
             "evidence": [
                 {
                     "transition_id": t.transition_id,
                     "step": t.step_index,
-                    "action": t.action.to_dict(),
-                    "tool_results": [r.to_dict() for r in t.tool_results],
+                    **render_transition(t),
                 }
                 for t in segment.transitions
             ],
@@ -199,14 +327,30 @@ class SkillLearningV2:
                 "termination": "",
                 "evidence_refs": transitions,
                 "raw_evidence": payload["evidence"],
+                "entry_state": entry_state,
+                "prerequisite_evidence": prerequisites,
             }
-        value = self.generate(
-            "skill.semantic_gradient",
-            payload,
-            media=self._media(segment),
-            validator=validate,
-        )
-        validate(value)
+        try:
+            value = self.generate(
+                "skill.semantic_gradient",
+                payload,
+                media=self._media(segment, prerequisite_images),
+                validator=validate,
+            )
+        except self._validation_error() as exc:
+            # Unknown relevance is not negative evidence. This durable outcome
+            # lets the task commit even when both cached model outputs are bad.
+            value = {
+                "status": "diagnosis_unavailable",
+                "is_related": None,
+                "no_change": None,
+                "needs_new_skill": None,
+                "evidence_refs": [],
+                "reason": str(exc),
+                "evidence_disposition": "excluded_from_eligibility_and_quality",
+            }
+        else:
+            validate(value)
         return {
             **value,
             "diagnosis_id": key,
@@ -463,7 +607,7 @@ class SkillLearningV2:
             references = {
                 d["skill_ref"]
                 for d in diagnoses[row.trajectory_id]
-                if d["skill_ref"] is not None and d["is_related"]
+                if d["skill_ref"] is not None and d["is_related"] is True
             }
             for reference in sorted(references):
                 skill = pool.get(reference)
@@ -589,28 +733,41 @@ class SkillLearningV2:
                         raise ValueError("Conflicting deduplication chain")
                     return value
 
-                result = self.generate(
-                    "skill.deduplication",
-                    {
-                        "instructions": "Compare only these candidate pairs. Archive a Skill only if BOTH its initiation conditions and full procedure/termination function are redundant with the retained Skill. Similar language or embedding similarity is not enough. Return no operation when functions are complementary.",
-                        "expected_output": {
-                            "duplicates": [
-                                {
-                                    "keep_ref": "reference",
-                                    "archive_ref": "reference",
-                                    "reason": "text",
-                                }
-                            ]
+                try:
+                    result = self.generate(
+                        "skill.deduplication",
+                        {
+                            "instructions": "Compare only these candidate pairs. Archive a Skill only if BOTH its initiation conditions and full procedure/termination function are redundant with the retained Skill. Similar language or embedding similarity is not enough. Return no operation when functions are complementary.",
+                            "expected_output": {
+                                "duplicates": [
+                                    {
+                                        "keep_ref": "reference",
+                                        "archive_ref": "reference",
+                                        "reason": "text",
+                                    }
+                                ]
+                            },
+                            "pairs": [[a.to_dict(), b.to_dict()] for a, b in pairs],
                         },
-                        "pairs": [[a.to_dict(), b.to_dict()] for a, b in pairs],
-                    },
-                    validator=validate,
-                )
-                validate(result)
-                for op in result["duplicates"]:
-                    pool = pool.archive(op["archive_ref"])
-                    removed.append(op["archive_ref"])
-                    audit.append({"type": "llm_semantic_duplicate", **op})
+                        validator=validate,
+                    )
+                except self._validation_error() as exc:
+                    # Keep valid refinements, additions and deterministic pruning;
+                    # an unavailable semantic judgment cannot archive a Skill.
+                    audit.append(
+                        {
+                            "type": "llm_deduplication_unavailable",
+                            "status": "validation_exhausted",
+                            "reason": str(exc),
+                            "pool_disposition": "retain_current_valid_updates",
+                        }
+                    )
+                else:
+                    validate(result)
+                    for op in result["duplicates"]:
+                        pool = pool.archive(op["archive_ref"])
+                        removed.append(op["archive_ref"])
+                        audit.append({"type": "llm_semantic_duplicate", **op})
         capacity = int(self.config.get("capacity", 20))
         if capacity < 1:
             raise ValueError("Skill capacity must be positive")
@@ -655,10 +812,26 @@ class SkillLearningV2:
                 self._diagnose(row, segment, advantages[row.trajectory_id], pool, queue)
                 for segment in skill_segments(row)
             ]
+        unavailable = [
+            diagnosis
+            for values in diagnoses.values()
+            for diagnosis in values
+            if diagnosis.get("status") == "diagnosis_unavailable"
+        ]
+        for diagnosis in unavailable:
+            queue.state["diagnosis_cache"][diagnosis["diagnosis_id"]] = diagnosis
+        eligible_diagnoses = {
+            trajectory_id: [
+                diagnosis
+                for diagnosis in values
+                if diagnosis.get("status") != "diagnosis_unavailable"
+            ]
+            for trajectory_id, values in diagnoses.items()
+        }
         queue.enqueue(
             rows,
             task_index=batch_index,
-            diagnoses=diagnoses,
+            diagnoses=eligible_diagnoses,
             active_references={s.reference for s in pool.active()},
         )
         pool, credits = self._statistics(pool, rows, diagnoses, advantages)
@@ -704,7 +877,18 @@ class SkillLearningV2:
                 "status": "pending",
             }
             batch_audits.append(audit)
-            aggregate = self._aggregate(target, entries, queue, parent, pool)
+            try:
+                aggregate = self._aggregate(target, entries, queue, parent, pool)
+            except self._validation_error() as exc:
+                # take_round already consumed these entries. Archive explicitly
+                # rather than selecting the same permanently cached bad batch.
+                audit.update(
+                    status="aggregation_unavailable",
+                    reason=str(exc),
+                    evidence_disposition="archived_failed_batch",
+                )
+                queue.state.setdefault("failed_batches", []).append(dict(audit))
+                continue
             aggregates.append(aggregate)
             if aggregate["no_change"]:
                 audit["status"] = "no_change"
@@ -788,6 +972,7 @@ class SkillLearningV2:
             "skill_pool": pool.to_dict(),
             "credits": credits,
             "semantic_gradients": [d for values in diagnoses.values() for d in values],
+            "diagnosis_failures": unavailable,
             "aggregates": aggregates,
             "candidates": proposals,
             "candidate_failures": failures,

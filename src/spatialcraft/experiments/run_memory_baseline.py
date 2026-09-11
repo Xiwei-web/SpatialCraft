@@ -8,7 +8,7 @@ import os
 from dataclasses import asdict, replace
 from pathlib import Path
 
-from spatialcraft.storage.atomic_io import atomic_write_json, read_json, sha256_file
+from spatialcraft.storage.atomic_io import atomic_write_json, sha256_file
 from spatialcraft.tools.real.common import SpatialToolPaths
 
 from .baseline_memory import (
@@ -23,12 +23,34 @@ from .run import _resource_files, load_api_key_file, preflight
 from .usage import cost_report
 
 
+def effective_baseline_settings(settings, config):
+    """Resolve the one capacity before constructing Runtime, callbacks or journal."""
+    if config.method == "skill_pro_sequence":
+        return replace(settings, skill_capacity=config.skill_capacity)
+    return settings
+
+
 def build_memory_pipeline(shared, settings, config):
     """Bind independent baseline learning to the runtime's actual executor/tools."""
     if not settings.is_v2:
         raise ValueError(
             "Memory baselines require the spatialcraft_v2 operation-aware runtime"
         )
+    if config.method == "skill_pro_sequence":
+        builder = getattr(shared, "learning_builders", None)
+        actual_capacity = getattr(getattr(builder, "skill", None), "config", {}).get(
+            "capacity"
+        )
+        runtime_settings = getattr(shared, "settings", settings)
+        if (
+            settings.skill_capacity != config.skill_capacity
+            or runtime_settings.skill_capacity != config.skill_capacity
+            or actual_capacity != config.skill_capacity
+        ):
+            raise ValueError(
+                "Skill-Pro capacity differs from the constructed Runtime/evolver; "
+                "apply effective_baseline_settings before constructing Runtime"
+            )
     learner = MemoryBaselineLearner(
         config,
         generate=shared.generate_knowledge,
@@ -36,6 +58,8 @@ def build_memory_pipeline(shared, settings, config):
         artifact_resolver=shared.artifact_resolver,
         evolve_skills=shared.evolve_skills,
         skill_ratio_mode=settings.skill_options.get("ratio_mode", "sequence"),
+        token_counter=getattr(shared, "metric_token_counter", None),
+        tokenizer_id=getattr(shared, "metric_tokenizer_id", None),
         experience_config={
             "capacity": config.memory_capacity,
             "rollouts_per_task": settings.rollouts_per_task,
@@ -67,17 +91,9 @@ def bind_inference_resources(binding, datasets):
     for path, checksum in media.items():
         if checksum is None or sha256_file(path) != checksum:
             raise ValueError("Dataset image checksum changed")
-    model_path = Path(binding["model_path"])
-    shards = sorted(
-        set(
-            read_json(model_path / "model.safetensors.index.json")[
-                "weight_map"
-            ].values()
-        )
-    )
-    binding["weights_sha256"] = {
-        shard: sha256_file(model_path / shard) for shard in shards
-    }
+    from .model_resources import complete_model_resource_binding
+
+    complete_model_resource_binding(binding)
     paths = SpatialToolPaths.from_env()
     binding["tool_resources_sha256"] = {
         str(path.relative_to(paths.root)): sha256_file(path)
@@ -109,6 +125,8 @@ def main(argv=None):
     parser.add_argument("--memory-capacity", type=int, default=100)
     parser.add_argument("--skill-capacity", type=int, default=20)
     parser.add_argument("--top-k", type=int, default=3)
+    parser.add_argument("--demonstration-max-tokens", type=int, default=1024)
+    parser.add_argument("--memory-max-words", type=int, default=256)
     parser.add_argument("--pilot-tasks", type=int)
     parser.add_argument("--api-key-file", type=Path)
     parser.add_argument("--report", type=Path)
@@ -131,6 +149,8 @@ def main(argv=None):
         skill_capacity=args.skill_capacity,
         retrieval_top_k=args.top_k,
         semantic_candidates=max(10, args.top_k),
+        demonstration_max_tokens=args.demonstration_max_tokens,
+        memory_max_words=args.memory_max_words,
     )
     settings, datasets, binding, report = preflight(
         project, args.preparation, args.config, args.datasets
@@ -141,7 +161,9 @@ def main(argv=None):
         parser.error(
             "Baseline comparison uses its own method branch; use a configuration without unrelated ablations"
         )
-    settings = replace(settings, experiment_name="baseline_" + args.method)
+    settings = effective_baseline_settings(
+        replace(settings, experiment_name="baseline_" + args.method), config
+    )
     descriptor = {**method_description(args.method), "config": asdict(config)}
     binding.update(
         memory_baseline=descriptor,
@@ -149,9 +171,13 @@ def main(argv=None):
         pilot_tasks=args.pilot_tasks,
         settings=settings.to_dict(),
     )
+    from .operation_profiles import resolved_configuration
+
+    binding["resolved_protocol"] = resolved_configuration(settings)
     report = {
         **report,
         "memory_baseline": descriptor,
+        "effective_settings": settings.to_dict(),
         "runtime_path": "MemoryBaselinePipeline -> shared real Runtime rollout callback",
         "result_path": str(
             args.output / "<dataset>" / "results" / "memory_baseline.json"

@@ -10,6 +10,10 @@ import json
 from dataclasses import asdict, dataclass, replace
 
 from spatialcraft.agent.decision import is_controlled_failure
+from spatialcraft.knowledge.evidence import (
+    render_public_task,
+    render_transition,
+)
 from spatialcraft.knowledge.experience import ExperienceBank
 from spatialcraft.knowledge.experience.index import ExperienceIndex
 from spatialcraft.knowledge.experience.learning_v2 import (
@@ -98,6 +102,7 @@ class MemoryBaselineConfig:
     semantic_candidates: int = 10
     utility_weight: float = 0.5
     memory_max_words: int = 256
+    demonstration_max_tokens: int = 1024
     workflow_max_words: int = 512
     workflow_max_operations: int = 2
 
@@ -112,17 +117,68 @@ class MemoryBaselineConfig:
                 self.retrieval_top_k,
                 self.semantic_candidates,
                 self.memory_max_words,
+                self.demonstration_max_tokens,
                 self.workflow_max_words,
                 self.workflow_max_operations,
             )
             < 1
         ):
             raise ValueError("Memory baseline limits must be positive")
+        if self.method == "skill_pro_sequence" and self.skill_capacity < len(
+            SeedCatalog.pool().active()
+        ):
+            raise ValueError("Skill-Pro capacity must fit all six initial seed skills")
         if (
             self.semantic_candidates < self.retrieval_top_k
             or not 0 <= self.utility_weight <= 1
         ):
             raise ValueError("Invalid candidate count or utility weight")
+
+
+def render_demonstration(row):
+    """Render public task/actions/observations/final, without incidental run IDs.
+
+    Artifact and frame references are stable local aliases so necessary dependency
+    links survive without corpus differences caused by random artifact identities.
+    Observations are not silently truncated; admission budgets this rendered text.
+    """
+    aliases = {
+        image.uri: f"task_image_{i + 1}" for i, image in enumerate(row.task.images)
+    }
+    frame_index, artifact_index = 0, 0
+    for step in row.transitions:
+        for result in step.tool_results:
+            for frame in result.coordinate_frames:
+                if frame.frame_id not in aliases:
+                    frame_index += 1
+                    aliases[frame.frame_id] = f"frame_{frame_index}"
+            for artifact in result.artifacts:
+                if artifact.uri not in aliases:
+                    artifact_index += 1
+                    aliases[artifact.uri] = f"tool_artifact_{artifact_index}"
+                aliases[artifact.artifact_id] = aliases[artifact.uri]
+
+    def local_refs(value):
+        if isinstance(value, str):
+            if value in aliases:
+                return aliases[value]
+            # Tool summaries sometimes interpolate an artifact URI inside prose.
+            for old in sorted(aliases, key=len, reverse=True):
+                if len(old) > 12:
+                    value = value.replace(old, aliases[old])
+            return value
+        if isinstance(value, dict):
+            return {key: local_refs(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [local_refs(item) for item in value]
+        return value
+
+    payload = {
+        "task": render_public_task(row.task),
+        "steps": [render_transition(step) for step in row.transitions],
+        "final_answer": row.final_answer,
+    }
+    return json.dumps(local_refs(payload), ensure_ascii=False, sort_keys=True)
 
 
 class MemoryBaselineLearner:
@@ -136,10 +192,13 @@ class MemoryBaselineLearner:
         evolve_skills=None,
         experience_config=None,
         skill_ratio_mode="sequence",
+        token_counter=None,
+        tokenizer_id=None,
     ):
         self.config, self.generate, self.embedder = config, generate, embedder
         self.resolve = artifact_resolver or (lambda uri: uri)
         self.evolve_skills = evolve_skills
+        self.token_counter, self.tokenizer_id = token_counter, tokenizer_id
         if config.method == "skill_pro_sequence" and (
             evolve_skills is None or skill_ratio_mode != "sequence"
         ):
@@ -149,6 +208,33 @@ class MemoryBaselineLearner:
         self.experience = ExperienceLearningV2(
             generate, embedder, experience_config, self.resolve
         )
+
+    def memory_budget_definition(self):
+        token_based = (
+            self.config.method == "rag_demonstrations"
+            and self.token_counter is not None
+        )
+        return {
+            "unit": "token" if token_based else "word",
+            "limit": self.config.demonstration_max_tokens
+            if token_based
+            else self.config.memory_max_words,
+            "measured_text": "exact ExperienceItem.prompt_text injected by retrieval",
+            "tokenizer": self.tokenizer_id if token_based else None,
+            "fallback": None
+            if token_based
+            else "explicit_whitespace_words_no_tokenizer",
+            "overflow": "reject_whole_demonstration_or_memory_without_truncation",
+        }
+
+    def _memory_budget(self, proposal):
+        definition = self.memory_budget_definition()
+        measured = (
+            int(self.token_counter(proposal.prompt_text))
+            if definition["unit"] == "token"
+            else word_count(proposal.prompt_text)
+        )
+        return {**definition, "measured": measured}
 
     def initial(self):
         skills = (
@@ -325,21 +411,15 @@ class MemoryBaselineLearner:
             "baseline.reflection",
             {
                 "method": method_description(self.config.method),
-                "task": row.task.to_dict(),
+                "task": {
+                    **render_public_task(row.task),
+                    "reference_answer": row.task.reference_answer,
+                },
                 "trajectory_id": row.trajectory_id,
                 "reward": row.reward,
                 "verifier": row.verifier.to_dict() if row.verifier else None,
                 "image_manifest": manifest,
-                "steps": [
-                    {
-                        "step_index": step.step_index,
-                        "action": step.action.to_dict(),
-                        "tool_results": [
-                            result.to_dict() for result in step.tool_results
-                        ],
-                    }
-                    for step in row.transitions
-                ],
+                "steps": [render_transition(step) for step in row.transitions],
                 "max_words": self.config.memory_max_words,
                 "expected_output": {
                     "memories": [
@@ -439,21 +519,15 @@ class MemoryBaselineLearner:
             "baseline.workflow",
             {
                 "method": method_description(self.config.method),
-                "task": rows[0].task.to_dict(),
+                "task": {
+                    **render_public_task(rows[0].task),
+                    "reference_answer": rows[0].task.reference_answer,
+                },
                 "rollouts": [
                     {
                         "trajectory_id": row.trajectory_id,
                         "reward": row.reward,
-                        "steps": [
-                            {
-                                "step_index": step.step_index,
-                                "action": step.action.to_dict(),
-                                "tool_results": [
-                                    result.to_dict() for result in step.tool_results
-                                ],
-                            }
-                            for step in row.transitions
-                        ],
+                        "steps": [render_transition(step) for step in row.transitions],
                     }
                     for row in rows
                 ],
@@ -524,11 +598,11 @@ class MemoryBaselineLearner:
         method = self.config.method
         if method == "skill_pro_sequence":
             value = self.evolve_skills(knowledge, rows, round_index, evolution_state)
+            pool = SkillPool.from_dict(value["skill_pool"], frozen=True)
+            if len(pool.active()) > self.config.skill_capacity:
+                raise ValueError("Skill-Pro evolver exceeded its declared capacity")
             return {
-                "knowledge": KnowledgeState(
-                    knowledge.experiences,
-                    SkillPool.from_dict(value["skill_pool"], frozen=True),
-                ).to_dict(),
+                "knowledge": KnowledgeState(knowledge.experiences, pool).to_dict(),
                 "evolution_state": value["evolution_state"],
                 "status": "completed",
                 "skill_audit": value,
@@ -567,16 +641,10 @@ class MemoryBaselineLearner:
                 )
                 continue
             if method == "rag_demonstrations":
-                procedure = [
-                    json.dumps(
-                        step.action.to_dict(), ensure_ascii=False, sort_keys=True
-                    )
-                    for step in row.transitions
-                ]
+                procedure = [render_demonstration(row)]
                 memories = [
                     {
-                        "condition": "For a similar spatial problem: "
-                        + row.task.question,
+                        "condition": "Verified demonstration for a similar spatial problem",
                         "procedure": procedure,
                         "evidence_refs": [row.trajectory_id],
                     }
@@ -597,14 +665,13 @@ class MemoryBaselineLearner:
                 proposal = self._memory(row, memory, index)
                 # Long demonstrations need explicit bounded storage. Reject rather
                 # than truncating a tool call or silently changing the method.
-                if (
-                    word_count(proposal.condition) + word_count(proposal.action)
-                    > self.config.memory_max_words
-                ):
+                measured = self._memory_budget(proposal)
+                if measured["measured"] > measured["limit"]:
                     reflection_audit.append(
                         {
                             "trajectory_id": row.trajectory_id,
-                            "status": "skipped_memory_word_budget",
+                            "status": "skipped_memory_" + measured["unit"] + "_budget",
+                            "budget": measured,
                         }
                     )
                     continue
@@ -620,6 +687,7 @@ class MemoryBaselineLearner:
                         "trajectory_id": row.trajectory_id,
                         "status": "added",
                         "reference": proposal.reference,
+                        "budget": measured,
                     }
                 )
         archives = sorted(
@@ -638,6 +706,25 @@ class MemoryBaselineLearner:
             "evolution_state": None,
             "status": "completed",
             "reflection_audit": reflection_audit,
+            "memory_construction": {
+                "eligible_successful_trajectories": sum(
+                    row.reward == 1.0 for row in rows
+                ),
+                "saved_memories": sum(
+                    item["status"] == "added" for item in reflection_audit
+                ),
+                "budget_rejected_memories": sum(
+                    item["status"]
+                    in {"skipped_memory_word_budget", "skipped_memory_token_budget"}
+                    for item in reflection_audit
+                ),
+                "validation_failed_trajectories": sum(
+                    item["status"] == "skipped_validation_failure"
+                    for item in reflection_audit
+                ),
+                "active_memories": len(bank.active()),
+                "budget_definition": self.memory_budget_definition(),
+            },
             "capacity_policy": "oldest_created_first",
             "archived_refs": [item.reference for item in archives],
         }
@@ -666,6 +753,7 @@ class MemoryBaselinePipeline:
             "config": asdict(learner.config),
             "seed": seed,
             "rollouts_per_task": rollouts_per_task,
+            "memory_budget": learner.memory_budget_definition(),
         }
         self.description, _ = self.journal.execute(
             "memory_baseline/descriptor", descriptor, lambda: descriptor
@@ -776,6 +864,12 @@ class MemoryBaselinePipeline:
                 },
             )
             state, evolution = KnowledgeState.from_dict(initial["knowledge"]), None
+            construction = {
+                "eligible_successful_trajectories": 0,
+                "saved_memories": 0,
+                "budget_rejected_memories": 0,
+                "validation_failed_trajectories": 0,
+            }
             for task_index, task in enumerate(tasks):
                 prefix = f"memory_baseline/training/{task_index:05d}"
                 self._scope(
@@ -828,6 +922,43 @@ class MemoryBaselinePipeline:
                     KnowledgeState.from_dict(value["knowledge"]),
                     value["evolution_state"],
                 )
+                construction["eligible_successful_trajectories"] += sum(
+                    row.reward == 1.0 for row in rows
+                )
+                for key in construction:
+                    if key != "eligible_successful_trajectories":
+                        construction[key] += value.get("memory_construction", {}).get(
+                            key, 0
+                        )
+            construction.update(
+                active_memories=len(state.experiences.active()),
+                memory_budget=self.learner.memory_budget_definition(),
+            )
+            if self.learner.config.method in {
+                "xskill_dual_memory",
+                "skill_pro_sequence",
+            }:
+                for key in (
+                    "saved_memories",
+                    "budget_rejected_memories",
+                    "validation_failed_trajectories",
+                ):
+                    construction[key] = None
+                construction["counter_coverage"] = (
+                    "LLM Experience/Skill operations use their own learning audits; simple-memory admission counts not applicable"
+                )
+            else:
+                construction["counter_coverage"] = (
+                    "all simple-memory admission attempts"
+                )
+            construction, _ = self.journal.execute(
+                "memory_baseline/construction",
+                {"snapshot": state.snapshot_id, "statistics": construction},
+                lambda: construction,
+            )
+            atomic_write_json(
+                self.journal.root / "results/memory_construction.json", construction
+            )
             final, _ = self.journal.execute(
                 "memory_baseline/frozen",
                 {"snapshot": state.snapshot_id, "evolution_state": evolution},
@@ -854,6 +985,7 @@ class MemoryBaselinePipeline:
                     "Baseline deployment dataset differs or overlaps training IDs"
                 )
             before, rows = knowledge.snapshot_id, []
+            retrieval_requests, retrieval_hits = 0, 0
             for task_index, task in enumerate(tasks):
                 prefix = f"memory_baseline/deployment/{task_index:05d}"
                 self._scope(
@@ -869,6 +1001,8 @@ class MemoryBaselinePipeline:
                         task, knowledge, deployment=True
                     ),
                 )
+                retrieval_requests += 1
+                retrieval_hits += bool(prepared["experiences"])
                 rows.extend(
                     self._rows(
                         task,
@@ -889,6 +1023,17 @@ class MemoryBaselinePipeline:
                 "accuracy": sum(row.reward for row in rows) / len(rows),
                 "trajectory_ids": [row.trajectory_id for row in rows],
                 "result_kind": "paper_inspired_adapter_evaluation",
+                "memory_construction": self.journal.read_committed(
+                    "memory_baseline/construction"
+                ),
+                "retrieval": {
+                    "requests": retrieval_requests,
+                    "nonempty_injections": retrieval_hits,
+                    "hit_rate": retrieval_hits / retrieval_requests
+                    if retrieval_requests
+                    else None,
+                    "definition": "deployment tasks with at least one injected memory / deployment tasks; not semantic relevance accuracy",
+                },
             }
             saved, _ = self.journal.execute(
                 "memory_baseline/results",

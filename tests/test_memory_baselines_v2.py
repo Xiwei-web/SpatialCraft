@@ -408,3 +408,228 @@ def test_xskill_rewrite_failure_keeps_actual_retrieval_audit_and_skips_injection
     assert result["retrieval_audit"]["retrieved_refs"] == ["E1@1"]
     assert result["retrieval_audit"]["injected_refs"] == []
     assert result["retrieval_audit"]["status"] == "rejected_model_output"
+
+
+def test_rag_semantic_demonstrations_ignore_raw_token_audit_and_include_observation():
+    import json
+
+    from test_knowledge_evidence import observed_row
+
+    from spatialcraft.experiments.baseline_memory import render_demonstration
+
+    learner = MemoryBaselineLearner(
+        MemoryBaselineConfig("rag_demonstrations"),
+        generate=Responses(),
+        embedder=Embedder(),
+    )
+    initial = learner.initial()
+    base = Rollout()(task("train", TaskSplit.TRAIN), initial, (), 0, 42, "test", False)
+    clean = observed_row(base)
+    raw = observed_row(base, raw=True)
+    # Different audit-generated call/transition IDs must not change corpus text.
+    assert render_demonstration(clean) == render_demonstration(raw)
+    left = learner.update(initial, (clean,), 0)
+    right = learner.update(initial, (raw,), 0)
+    clean_bank = KnowledgeState.from_dict(left["knowledge"]).experiences
+    raw_bank = KnowledgeState.from_dict(right["knowledge"]).experiences
+    assert len(clean_bank.active()) == len(raw_bank.active()) == 1
+    text = raw_bank.active()[0].prompt_text
+    assert text == clean_bank.active()[0].prompt_text
+    assert "2.5" in text and "estimated_metric" in text and "geometry" in text
+    for excluded in (
+        "raw_response",
+        "token_ids",
+        "RAW_AUDIT",
+        "PRIVATE_GT",
+        "random-artifact-identity",
+        "random-run",
+        "created_at",
+        "call_id",
+    ):
+        assert excluded not in text
+    assert '"final_answer": "A"' in text
+    assert "RAW_AUDIT" in json.dumps(raw.to_dict())
+    assert (
+        left["memory_construction"]["saved_memories"]
+        == right["memory_construction"]["saved_memories"]
+        == 1
+    )
+
+
+def test_rag_token_budget_measures_exact_injected_prompt_and_reports_rejections(
+    tmp_path,
+):
+    measured = []
+
+    def count_tokens(text):
+        measured.append(text)
+        return 1100
+
+    learner = MemoryBaselineLearner(
+        MemoryBaselineConfig("rag_demonstrations", demonstration_max_tokens=1024),
+        generate=Responses(),
+        embedder=Embedder(),
+        token_counter=count_tokens,
+        tokenizer_id="test-executor-tokenizer",
+    )
+    pipeline = MemoryBaselinePipeline(
+        learner=learner,
+        journal=RunJournal(tmp_path, {"test": "budget"}),
+        rollout=Rollout(),
+    )
+    training = (task("train", TaskSplit.TRAIN),)
+    frozen = pipeline.accumulate(training)
+    result = pipeline.deploy((task("heldout", TaskSplit.TEST),), frozen)
+    assert not frozen.experiences.active()
+    assert len(measured) == 2 and all(
+        text.startswith("Condition:") for text in measured
+    )
+    stats = result["memory_construction"]
+    assert stats["eligible_successful_trajectories"] == 2
+    assert stats["budget_rejected_memories"] == 2
+    assert stats["saved_memories"] == stats["active_memories"] == 0
+    assert stats["memory_budget"]["unit"] == "token"
+    assert stats["memory_budget"]["tokenizer"] == "test-executor-tokenizer"
+    assert result["retrieval"]["hit_rate"] == 0
+    assert result["retrieval"]["requests"] == 1
+    # Replaying committed construction never reruns token admission or execution.
+    pipeline.accumulate(training)
+    assert len(measured) == 2
+
+
+def test_rag_real_runtime_callback_saves_raw_audited_rollouts_and_retrieves(tmp_path):
+    from test_runtime_v2 import ScriptedModel, runtime, tasks
+
+    model = ScriptedModel()
+    r = runtime(tmp_path, model)
+    shared = r.dataset("fixture")
+    shared.metric_token_counter = lambda text: len(text.split())
+    shared.metric_tokenizer_id = "scripted-executor-tokenizer"
+    pipeline = build_memory_pipeline(
+        shared, r.settings, MemoryBaselineConfig("rag_demonstrations")
+    )
+    training = tasks(tmp_path)[:1]
+    frozen = pipeline.accumulate(training)
+    heldout = replace(training[0], task_id="heldout", split=TaskSplit.TEST)
+    result = pipeline.deploy((heldout,), frozen)
+    assert pipeline.rollout is shared.rollout
+    assert result["memory_construction"]["eligible_successful_trajectories"] == 4
+    assert result["memory_construction"]["saved_memories"] == 4
+    assert result["retrieval"]["hit_rate"] == 1
+    assert len(frozen.experiences.active()) == 4
+    # No Skill slots exist in this baseline: its shared v2 executor uses fallback.
+    assert [request.metadata["operation"] for request in model.requests] == [
+        "execution.fallback"
+    ] * 5
+    stored = shared.journal.read_committed(
+        "memory_baseline/training/00000/rollouts/00/complete"
+    )
+    assert stored["transitions"][0]["action"]["raw_response"]
+    assert "token_ids" not in frozen.experiences.active()[0].prompt_text
+
+
+def test_skill_pro_capacity_rejects_less_than_seed_pool():
+    with pytest.raises(ValueError, match="six initial"):
+        MemoryBaselineConfig("skill_pro_sequence", skill_capacity=3)
+
+
+def test_skill_pro_capacity_ten_controls_actual_runtime_evolution(tmp_path):
+    from test_runtime_v2 import ScriptedModel, runtime, tasks
+
+    from spatialcraft.experiments.run_memory_baseline import effective_baseline_settings
+    from spatialcraft.schemas import SkillItem
+
+    r = runtime(tmp_path, ScriptedModel())
+    config = MemoryBaselineConfig("skill_pro_sequence", skill_capacity=10)
+    r.settings = effective_baseline_settings(r.settings, config)
+    shared = r.dataset("fixture")
+    pipeline = build_memory_pipeline(shared, r.settings, config)
+    assert shared.settings.skill_capacity == 10
+    assert shared.learning_builders.skill.config["capacity"] == 10
+    assert pipeline.description["config"]["skill_capacity"] == 10
+    state = pipeline.learner.initial()
+    pool = SkillPool(state.skills.all())
+    for i in range(8):
+        pool = pool.add(
+            SkillItem(
+                skill_id=f"extra-{i}",
+                name=f"Distinct {i}",
+                initiation=f"Condition {i}",
+                policy=(f"Procedure {i}",),
+                termination=f"Done {i}",
+            )
+        )
+    state = KnowledgeState(state.experiences, pool.freeze())
+    rows = tuple(
+        Rollout()(tasks(tmp_path)[0], state, (), i, i, "test", False) for i in range(4)
+    )
+    # The real bound LearningBuildersV2.evolve callback runs diagnosis/maintenance.
+    updated = pipeline.learner.update(state, rows, 0)
+    final = KnowledgeState.from_dict(updated["knowledge"])
+    assert len(final.skills.active()) == 10
+    assert (
+        len(
+            [
+                item
+                for item in updated["skill_audit"]["maintenance_operations"]
+                if item["type"] == "capacity_archive"
+            ]
+        )
+        == 4
+    )
+
+
+def test_skill_pro_rejects_already_constructed_runtime_capacity_mismatch(tmp_path):
+    from test_runtime_v2 import ScriptedModel, runtime
+
+    r = runtime(tmp_path, ScriptedModel())
+    shared = r.dataset("fixture")
+    with pytest.raises(ValueError, match="effective_baseline_settings"):
+        build_memory_pipeline(
+            shared,
+            r.settings,
+            MemoryBaselineConfig("skill_pro_sequence", skill_capacity=10),
+        )
+
+
+def test_skill_pro_cli_preflight_resolves_capacity_before_runtime(
+    tmp_path, monkeypatch, capsys
+):
+    import json
+
+    from spatialcraft.experiments import run_memory_baseline
+    from spatialcraft.experiments.settings import ExperimentSettings
+
+    settings = ExperimentSettings(
+        protocol_version="spatialcraft_v2", embedding_model="text-embedding-3-large"
+    )
+    monkeypatch.setattr(
+        run_memory_baseline,
+        "preflight",
+        lambda *args: (settings, {}, {}, {"status": "preflight_passed_not_run"}),
+    )
+    report = tmp_path / "report.json"
+    run_memory_baseline.main(
+        [
+            "--method",
+            "skill_pro_sequence",
+            "--config",
+            str(tmp_path / "config.yaml"),
+            "--preparation",
+            str(tmp_path / "prep"),
+            "--output",
+            str(tmp_path / "out"),
+            "--skill-capacity",
+            "10",
+            "--report",
+            str(report),
+        ]
+    )
+    value = json.loads(report.read_text())
+    assert (
+        value["memory_baseline"]["config"]["skill_capacity"]
+        == value["effective_settings"]["skill_capacity"]
+        == 10
+    )
+    assert not (tmp_path / "out").exists()
+    capsys.readouterr()

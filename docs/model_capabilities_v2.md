@@ -79,3 +79,17 @@ metadata:
 ## 验证边界
 
 `tests/test_operation_profiles_v2.py` 通过本地 provider adapter 和安装的 Google GenAI SDK 检查实际 payload，不访问远程 endpoint。`tests/test_exact_action_target_v2.py` 检查原 token 片段与 prefix 评分，并调用安装版 Qwen3.5 的 `get_rope_index` 验证图像 token 的位置保持不变、续写 token 的 `mm_token_type_ids=0`。真实 GPU/endpoint 验证应另看对应运行日志，不能从这些 CPU 测试推导实验准确率。
+
+## Responses 请求边界（二次复审）
+
+完整审计 metadata 留在本地 request journal；发给 Responses 的仅为固定白名单标量索引及完整 metadata 摘要，最多 16 项、key 不超过 64 字符、value 不超过 512 字符。长索引值改发摘要，嵌套审计对象不发送。[官方 metadata 约束](https://developers.openai.com/api/reference/python/resources/responses/methods/create)
+
+GPT-5.4（含日期快照名）在非显式 `none` reasoning 时省略 temperature/top_p；显式请求不支持的 logprobs 则拒绝。其他模型可通过 `metadata.sampling_requires_reasoning_none` 显式采用这一策略，不能由模型家族名字推定兼容性。requested/effective sampling 字段保存到 provider raw、知识验证记录与 usage；effective=null 表示未发送，不猜测服务器默认值。`generation.extra` 不允许绕过受管参数。这里适配的是请求契约，未据此宣称实际端点已通过。[GPT-5.4 参数兼容性](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.4)
+
+远程 response 返回的实际 `model`、`model_version`/`modelVersion` 与 `system_fingerprint`（若有）记录于 usage；它们不能替代不可访问的远程权重身份，也不保证服务未来版本稳定。
+
+## 各本地角色的资源身份
+
+`model_resources` 将 executor、scorer、knowledge_builder 指向各自资源清单，共享路径只哈希一次。清单覆盖实际模型与 processor/tokenizer 目录（包括 chat template）、revision 和权重 shard；preflight 标记 `pending_execute`，execute 在任何模型/API 调用之前计算所有本地角色的权重哈希并升级为 `complete`。Runtime 在建 journal 前检查角色、辅助文件内容与权重清单/stat，重新启动 execute 会重新计算权重内容哈希。资源或配置变化要求新的运行身份，不能混合复用旧结果。
+
+仅直接构造的无资源绑定脚本化 Runtime 标记 `unbound_programmatic_runtime`，不可当作正式可复现身份。远程模型无法冻结服务端权重，其复现范围依赖配置和可返回的版本信息。

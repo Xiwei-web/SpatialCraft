@@ -13,6 +13,7 @@ import json
 from dataclasses import replace
 from math import isfinite
 
+from spatialcraft.knowledge.evidence import render_public_task, render_transition
 from spatialcraft.models import ContentPart
 from spatialcraft.schemas import (
     ExperienceItem,
@@ -423,7 +424,10 @@ class ExperienceLearningV2:
             "from post-hoc causal hypotheses. The completed rollout's reference answer "
             "and verification are offline learning evidence only. Do not invent reasoning "
             "traces or treat all-failure trajectories as a successful strategy.",
-            "task": row.task.to_dict(),
+            "task": {
+                **render_public_task(row.task),
+                "reference_answer": row.task.reference_answer,
+            },
             "trajectory_id": row.trajectory_id,
             "image_manifest": manifest,
             "skill_segments": segments,
@@ -432,10 +436,8 @@ class ExperienceLearningV2:
             ],
             "steps": [
                 {
-                    "step_index": step.step_index,
+                    **render_transition(step),
                     "evidence_ref": f"{row.trajectory_id}:step-{step.step_index}",
-                    "action": step.action.to_dict(),
-                    "tool_results": [result.to_dict() for result in step.tool_results],
                 }
                 for step in row.transitions
             ],

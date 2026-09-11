@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+from dataclasses import replace
 from time import perf_counter
 from typing import Any
 
@@ -78,6 +81,71 @@ class OpenAIResponsesProvider(ModelProvider):
             f"OpenAI Responses adapter does not encode {part.kind.value} input"
         )
 
+    def parameter_audit(self, request: ModelRequest) -> dict[str, Any]:
+        """Describe sent sampling parameters without loading a client or any media."""
+        settings = request.settings
+        requires_none = bool(
+            re.fullmatch(r"gpt-5\.4(?:-\d{4}-\d{2}-\d{2})?", self.config.model_id)
+            or self.config.metadata.get("sampling_requires_reasoning_none", False)
+        )
+        # An unspecified effort does not establish the required explicit none.
+        omit_sampling = requires_none and settings.reasoning_effort != "none"
+        return {
+            "requested_temperature": settings.temperature,
+            "requested_top_p": settings.top_p,
+            "effective_temperature": None if omit_sampling else settings.temperature,
+            "effective_top_p": None if omit_sampling else settings.top_p,
+            "sampling_parameters_omitted": omit_sampling,
+            "sampling_parameter_policy": (
+                "omit_unsupported_reasoning_sampling"
+                if omit_sampling
+                else "send_requested"
+            ),
+            "reasoning_effort": settings.reasoning_effort,
+            "effective_value_semantics": "null means parameter not sent; server default is not inferred",
+        }
+
+    @staticmethod
+    def api_metadata(request: ModelRequest) -> dict[str, str]:
+        """Send bounded lookup fields; the complete metadata remains in the journal."""
+        metadata = request.metadata
+        if not metadata:
+            return {}
+        encoded = json.dumps(
+            metadata, ensure_ascii=False, sort_keys=True, default=str, allow_nan=False
+        )
+        result = {"audit_sha256": hashlib.sha256(encoded.encode()).hexdigest()}
+        keys = (
+            "protocol_version",
+            "operation",
+            "role",
+            "phase",
+            "task_id",
+            "snapshot_id",
+            "rollout_index",
+            "step_index",
+            "state_id",
+            "retry_index",
+            "template_sha256",
+            "rendered_prompt_sha256",
+            "input_snapshot_id",
+        )
+        for key in keys:
+            value = metadata.get(key)
+            if value is None or not isinstance(value, (str, int, float, bool)):
+                continue
+            text = str(value)
+            result[key] = (
+                text
+                if len(text) <= 512
+                else "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+            )
+        if len(result) > 16 or any(
+            len(k) > 64 or len(v) > 512 for k, v in result.items()
+        ):
+            raise ModelRequestError("API metadata exceeds Responses limits")
+        return result
+
     def build_payload(self, request: ModelRequest) -> dict[str, Any]:
         if request.model_alias != self.config.alias:
             raise ModelRequestError(
@@ -147,20 +215,24 @@ class OpenAIResponsesProvider(ModelProvider):
             payload["instructions"] = "\n\n".join(instructions)
         if settings.max_output_tokens is not None:
             payload["max_output_tokens"] = settings.max_output_tokens
-        if settings.temperature is not None:
-            payload["temperature"] = settings.temperature
-        if settings.top_p is not None:
-            payload["top_p"] = settings.top_p
+        sampling = self.parameter_audit(request)
+        if sampling["effective_temperature"] is not None:
+            payload["temperature"] = sampling["effective_temperature"]
+        if sampling["effective_top_p"] is not None:
+            payload["top_p"] = sampling["effective_top_p"]
         if settings.reasoning_effort is not None:
             payload["reasoning"] = {"effort": settings.reasoning_effort}
         if settings.logprobs:
+            if sampling["sampling_parameters_omitted"]:
+                raise ModelRequestError(
+                    "This reasoning mode does not support requested logprobs"
+                )
             payload["top_logprobs"] = settings.top_logprobs or 0
         if settings.response_format is not None:
             payload["text"] = {"format": settings.response_format}
-        if request.metadata:
-            payload["metadata"] = {
-                str(key): str(value) for key, value in request.metadata.items()
-            }
+        metadata = self.api_metadata(request)
+        if metadata:
+            payload["metadata"] = metadata
         if request.tools:
             payload["tools"] = [
                 {
@@ -180,7 +252,15 @@ class OpenAIResponsesProvider(ModelProvider):
                     "type": "function",
                     "name": request.tool_choice,
                 }
-        reserved = set(payload)
+        reserved = set(payload) | {
+            "metadata",
+            "temperature",
+            "top_p",
+            "reasoning",
+            "seed",
+            "top_logprobs",
+            "logprobs",
+        }
         overlap = reserved & set(settings.extra)
         if overlap:
             raise ModelRequestError(
@@ -190,8 +270,8 @@ class OpenAIResponsesProvider(ModelProvider):
         return payload
 
     def generate(self, request: ModelRequest) -> ModelResponse:
-        client = self._make_client()
         payload = self.build_payload(request)
+        client = self._make_client()
         started = perf_counter()
         try:
             response = client.responses.create(**payload)
@@ -200,11 +280,19 @@ class OpenAIResponsesProvider(ModelProvider):
                 f"OpenAI Responses request failed for {self.config.alias}: {exc}"
             ) from exc
         latency_ms = (perf_counter() - started) * 1000
-        return parse_openai_responses(
+        parsed = parse_openai_responses(
             response,
             provider=self.provider_name,
             model=self.config.model_id,
             latency_ms=latency_ms,
+        )
+        return replace(
+            parsed,
+            raw={
+                **(parsed.raw or {}),
+                "spatialcraft_request_parameters": self.parameter_audit(request),
+                "spatialcraft_api_metadata": payload.get("metadata", {}),
+            },
         )
 
 

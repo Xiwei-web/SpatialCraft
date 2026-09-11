@@ -47,6 +47,39 @@ backend verification must be reported separately. The registered tool names rema
   It is not the center of a complete solid object. Object bounds have the same
   visibility limitation.
 
+## Geometry frame and value units (2.1.0)
+
+Geometry reports `source_frame_id`, `result_frame_id`,
+`source_coordinate_length_unit`, `coordinate_length_unit`, and `value_unit`.
+The compatibility fields `frame_id` and `unit` alias the result frame and value
+unit. An angle in degrees or a dimensionless rotation leaves its world frame's
+length unit unchanged. Pixel/normalized conversion similarly creates a distinct
+result frame when its coordinate unit changes.
+
+For projection, `frame_id`/`source_frame_id` identifies the 3D source world;
+`target_frame_id` identifies an independent pixel frame. If omitted, the pixel
+ID is derived from the calibration, world identity, and pixel-space convention.
+`pixel_space` and `intrinsics_space` are `processed` by default and may each be
+`source`; when different, the recorded affine `source_to_processed` mapping is
+required and applied (including half-pixel resize offsets). Camera intrinsics
+are never silently relabelled between image spaces. Projection validity means
+positive camera-z, not inclusion within image bounds.
+
+Projected NPZ artifacts include full `points`/`pixels`, validity, pixel-space
+semantics, intrinsics, camera-to-world, world identity and length unit, and scale
+status. `backproject_points(points_uri=..., depth_values=...)` consumes a valid
+projection artifact, recovers its calibration, and rejects conflicting declared
+metadata. It requires positive camera-z depths; invalid projected entries must
+be explicitly selected out by the caller before backprojection. For inline
+backprojection, `source_frame_id` labels pixels and `target_frame_id` labels the
+output world; the old `frame_id` remains a world-output fallback.
+
+Geometry point artifacts preserve the upstream `scale_status` through rigid
+transforms, projection and backprojection. Supplying `length_unit="meter"` alone
+leaves scale `unverified`; it never establishes metric accuracy. `estimated_metric`
+remains an estimate. Existing artifacts without scale metadata remain unverified,
+and explicit arguments cannot silently override stored scale or coordinate data.
+
 ## Implemented API and draft correspondence
 
 | Draft API / capability | Actual invocation and output | Status / limit |
@@ -63,7 +96,7 @@ backend verification must be reported separately. The registered tool names rema
 | B.3 angle between vectors | `geometry(operation="angle_between_vectors", first, second)` | Implemented in degrees; zero vectors rejected |
 | B.3 vector rotation | `geometry(operation="rotation_matrix_from_vectors", first, second)` | Implemented, including antiparallel vectors; opposite-vector roll is chosen deterministically, not inferred physically |
 | B.3 SE(3) transformation | `geometry(operation="transform_points", points or points_uri, matrix, target_frame_id)` | Implemented; validates proper rotation; full transformed points persisted and bounded preview returned |
-| B.3 projection / inverse projection | `geometry(operation="project_points" or "backproject_points", points, intrinsics, camera_to_world, depth_values?)` | Implemented; inverse uses camera-z depth, not ray length; points behind camera return null and false validity |
+| B.3 projection / inverse projection | `geometry(operation="project_points" or "backproject_points", points or points_uri, intrinsics?, camera_to_world?, depth_values?, pixel_space, intrinsics_space, source_to_processed?)` | Implemented; inverse uses camera-z depth, not ray length; points behind camera return null and false validity |
 | B.3 ground-plane RANSAC | None | Not implemented; robust plane fitting and semantic identification as floor are separate operations |
 | B.3 normalized coordinates | Existing `geometry(operation="convert_points", ..., source_unit, target_unit)` | Existing normalized convention is 0–1, not the draft's 0–1000; callers must explicitly convert and manuscript must match |
 | B.4 mask centroid/area/bbox | `mask(operation="statistics", mask_uris=[...])`; foreground count/fraction, `centroid_xy`, `bbox_xyxy` | Implemented median centroid and area; bbox_xyxy uses exact bounds with exclusive maxima, robust_bbox_xyxy exposes 1st/99th percentiles when foreground >100 pixels |

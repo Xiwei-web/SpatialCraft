@@ -4,6 +4,8 @@
 
 本文用于让新对话中的 Agent 快速了解 SpatialCraft 的代码、空间工具和数据集位置。
 
+GPT-5.4 ViewSpatial RAG（2026-09-11）：已提交 **229405**，gpt-5.4 / medium / 单次16384 tokens，环境2856题×4次、测试2856题×1次，text-embedding-3-large / Top-3原始样例检索，独立从空库建库。与229312冻结代码和输入一致，输入/媒体校验通过，复用229347的GPT-5.4真实API验收。提交时 **PENDING / QOSMaxJobsPerUserLimit**，已有3项RAG任务运行，名额释放后由Slurm自动调度。独立运行 `spatialcraftLog/runs/gpt54_rag_viewspatial_medium16384_20260911_v1`；启动后日志 `slurm-229405.out`，最终accuracy `viewspatial/results/deployment.json`。详见 [GPT-5.4 ViewSpatial RAG运行说明](RAG/runs/20260911_viewspatial_gpt54_medium16384.md)。
+
 GPT-5.4 RAG（2026-09-11）：已提交 **229347**，与两个mini任务独立并行；gpt-5.4 / medium / 单次16384 tokens，环境每题4次、部署每题1次，Top-3原始样例检索。RoboSpatial、ERQA、Omni3D、SAT测试175/200/250/300题，执行源码及数据输入与229287一致，GPT-5.4独立从空库建库；真实GPT-5.4建库→embedding检索→多图部署API验收通过。运行 `spatialcraftLog/runs/gpt54_rag_medium16384_20260911_v1`；日志 `slurm-229347.out`，最终 `<dataset>/results/deployment.json` 及 `results/accuracy.md`。提交时PENDING，状态以Slurm为准。详见 [GPT-5.4 RAG运行说明](RAG/runs/20260911_gpt54_medium16384.md)。
 
 ViewSpatial RAG（2026-09-11）：已提交 **229312**，与229287独立并行；gpt-5.4-mini / medium / 单次16384 tokens，环境2856题×4次、测试2856题×1次，Top-3原始样例检索。复用229287的同一冻结代码，ViewSpatial输入与此前mini直接回答baseline逐字节一致；完整划分/媒体离线检查通过，无跨集合内容完全重复。独立运行 `spatialcraftLog/runs/gpt54mini_rag_viewspatial_medium16384_20260911_v1`；实时日志 `slurm-229312.out`，进度 `viewspatial/progress.json`，最终accuracy `viewspatial/results/deployment.json`。提交时PENDING，状态以Slurm为准。详见 [ViewSpatial RAG运行说明](RAG/runs/20260911_viewspatial_gpt54mini_medium16384.md)。

@@ -471,3 +471,318 @@ def test_provider_configuration_failure_is_not_a_candidate_rejection():
         SequenceLikelihoodGate(FailingScorer()).select(
             (candidate(parent),), parent=parent, examples=(example(parent),)
         )
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["skill.semantic_gradient", "skill.gradient_aggregation", "skill.deduplication"],
+)
+def test_skill_validation_recovery_never_swallows_infrastructure_errors(operation):
+    from spatialcraft.experiments.evolution_queue import RelatedEvolutionQueue
+
+    learning = learner([])
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    learning.generate = fail
+    parent = skill()
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        if operation == "skill.semantic_gradient":
+            learning.evolve(
+                SimpleNamespace(skills=SkillPool((parent,))), rows(parent), 0
+            )
+        elif operation == "skill.gradient_aggregation":
+            learning._aggregate(
+                parent.reference,
+                [],
+                RelatedEvolutionQueue(),
+                parent,
+                SkillPool((parent,)),
+            )
+        else:
+            learning.config.update(
+                deduplication_mode="llm", deduplication_cosine_threshold=-1
+            )
+            other = replace(parent, skill_id="other", initiation="different initiation")
+            learning._maintain(SkillPool((parent, other)))
+
+
+def _row_with_prior_artifact_context(parent):
+    from spatialcraft.agent.state_builder import StateBuilder
+    from spatialcraft.schemas import (
+        ArtifactRef,
+        ArtifactType,
+        CoordinateFrame,
+        RetrievedExperienceRef,
+        ToolCall,
+        ToolResult,
+        ToolStatus,
+    )
+
+    row = rows(parent)[0]
+    builder = StateBuilder()
+    state = SpatialState(
+        task_id=row.task.task_id,
+        step_index=0,
+        retrieved_experiences=(
+            RetrievedExperienceRef(
+                experience_id="experience-axes",
+                version=1,
+                retrieval_score=0.9,
+                original_text="Original wording",
+                contextualized_text="INJECTED_AXES_GUIDANCE",
+            ),
+        ),
+    )
+    transitions = []
+    for index, marker in enumerate(("IRRELEVANT_HISTORY", "PREREQUISITE_CENTER")):
+        call = ToolCall(tool_name="reconstruct", arguments={"image": "original.png"})
+        action = AgentAction.tool(call)
+        artifact = ArtifactRef(
+            artifact_type=ArtifactType.ARRAY,
+            artifact_id=f"points-{index}",
+            uri=f"artifact://points-{index}.npy",
+            frame_id="world",
+            metadata={"scale_status": "estimated_metric"},
+        )
+        overlay = ArtifactRef(
+            artifact_type=ArtifactType.IMAGE,
+            uri=f"artifact://overlay-{index}.png",
+            mime_type="image/png",
+            frame_id="world",
+        )
+        result = ToolResult(
+            tool_call_id=call.call_id,
+            tool_name="reconstruct",
+            status=ToolStatus.SUCCEEDED,
+            text=marker,
+            structured_output={
+                "center": [1, 2, 3],
+                "valid": True,
+                "length_unit": "meter",
+            },
+            artifacts=(artifact, overlay),
+            coordinate_frames=(CoordinateFrame(frame_id="world", unit="meter"),),
+        )
+        after = builder.after_tools(state, action, (result,))
+        transitions.append(
+            Transition(
+                step_index=index,
+                state_before=state,
+                state_after=after,
+                action=action,
+                tool_results=(result,),
+                transition_id=f"prior-{index}",
+            )
+        )
+        state = after
+    active = ActiveSkillRef(skill_id=parent.skill_id, version=1, activated_at_step=2)
+    state = replace(state, active_skill=active)
+    call = ToolCall(
+        tool_name="geometry", arguments={"point_map_uri": "artifact://points-1.npy"}
+    )
+    action = replace(
+        AgentAction.tool(call),
+        raw_response={
+            "raw_generation": "RAW_GENERATION_MARKER",
+            "token_ids": list(range(1000)),
+        },
+    )
+    result = ToolResult(
+        tool_call_id=call.call_id,
+        tool_name="geometry",
+        status=ToolStatus.SUCCEEDED,
+        structured_output={"distance": 2, "unit": "meter", "valid": True},
+    )
+    after = builder.after_tools(state, action, (result,))
+    metadata = {
+        "model_request": request_to_dict(request(parent)),
+        "action_target": {
+            "text": "A",
+            "token_ids": [1, 2],
+            "prefix": "",
+            "prefix_token_ids": [],
+        },
+    }
+    transitions.append(
+        Transition(
+            step_index=2,
+            state_before=state,
+            state_after=after,
+            action=action,
+            tool_results=(result,),
+            active_skill=active,
+            transition_id="segment-tool",
+            metadata=metadata,
+        )
+    )
+    final = AgentAction.final("A")
+    transitions.append(
+        Transition(
+            step_index=3,
+            state_before=after,
+            state_after=builder.after_final(after, final),
+            action=final,
+            active_skill=active,
+            done=True,
+            transition_id="segment-final",
+            metadata=metadata,
+        )
+    )
+    return replace(row, transitions=tuple(transitions)), parent
+
+
+def test_diagnosis_includes_dependency_entry_state_images_and_experience_without_expanding_scoring():
+    import json
+
+    from spatialcraft.experiments.evolution_queue import RelatedEvolutionQueue
+    from spatialcraft.experiments.journal import digest
+    from spatialcraft.knowledge.skill.segments import skill_segments
+
+    row, parent = _row_with_prior_artifact_context(skill())
+    segment = skill_segments(row)[-1]
+    captured = []
+    base = generate_factory([])
+
+    def generate(operation, payload, media=(), validator=None):
+        captured.append((payload, media, validator))
+        return base(operation, payload, media, validator)
+
+    learning = learner([])
+    learning.generate = generate
+    learning.resolve = lambda uri: "/resolved/" + uri.removeprefix("artifact://")
+    diagnosis = learning._diagnose(
+        row, segment, 0.5, SkillPool((parent,)), RelatedEvolutionQueue()
+    )
+    payload, media, validator = captured[0]
+    text = json.dumps(payload)
+    assert "PREREQUISITE_CENTER" in text and "INJECTED_AXES_GUIDANCE" in text
+    assert "IRRELEVANT_HISTORY" not in text
+    assert "RAW_GENERATION_MARKER" not in text and '"token_ids"' not in text
+    assert '"scale_status": "estimated_metric"' in text and '"unit": "meter"' in text
+    assert (
+        payload["entry_state"]["selection_policy"] == "transitive_artifact_dependencies"
+    )
+    assert payload["entry_state"]["omitted_prior_tool_observations"] == 1
+    assert [e["transition_id"] for e in payload["prerequisite_evidence"]] == ["prior-1"]
+    assert [e["transition_id"] for e in payload["evidence"]] == [
+        "segment-tool",
+        "segment-final",
+    ]
+    assert "/resolved/overlay-1.png" in {p.uri for p in media}
+    assert "/resolved/overlay-0.png" not in {p.uri for p in media}
+    with pytest.raises(ValueError, match="supplied transitions"):
+        validator({**diagnosis, "evidence_refs": ["prior-1"]})
+    examples = learning._examples(
+        [
+            {
+                "trajectory_id": row.trajectory_id,
+                "trajectory_sha256": digest(row.to_dict()),
+                "transition_ids": diagnosis["transition_ids"],
+                "advantage": 0.5,
+            }
+        ],
+        parent,
+        {row.trajectory_id: row},
+    )
+    assert [e.transition_id for e in examples] == ["segment-tool", "segment-final"]
+    assert all(e.target_token_ids == (1, 2) for e in examples)
+
+
+def test_numeric_or_final_segment_retains_bounded_entry_observations():
+    from spatialcraft.knowledge.skill.segments import skill_segments
+
+    row, _parent = _row_with_prior_artifact_context(skill())
+    # A final-only activation has no artifact arguments to follow, but still
+    # needs the preceding geometric evidence at its actual entry boundary.
+    final = row.transitions[-1]
+    active = replace(final.active_skill, activated_at_step=3)
+    final = replace(
+        final,
+        active_skill=active,
+        state_before=replace(final.state_before, active_skill=active),
+    )
+    row = replace(row, transitions=(*row.transitions[:-1], final))
+    context, prerequisites, _ = learner([])._entry_context(row, skill_segments(row)[-1])
+    assert context["step_index"] == 3
+    assert (
+        context["selection_policy"]
+        == "last_two_tool_observations_without_named_prior_dependency"
+    )
+    assert len(context["tool_observations"]) == 2
+    assert context["omitted_prior_tool_observations"] == 1
+    assert not prerequisites
+
+
+def test_unavailable_none_diagnosis_is_durable_unknown_without_discovery_or_quality():
+    from spatialcraft.experiments.evolution_queue import RelatedEvolutionQueue
+    from spatialcraft.experiments.knowledge_generator import KnowledgeValidationError
+    from spatialcraft.knowledge.skill.segments import skill_segments
+
+    calls = []
+    learning = learner([])
+
+    def invalid(*args, **kwargs):
+        calls.append(args[0])
+        raise KnowledgeValidationError("Both output attempts failed schema validation")
+
+    learning.generate = invalid
+    group = rows(None)
+    result = learning.evolve(SimpleNamespace(skills=SkillPool()), group, 0)
+    assert len(result["diagnosis_failures"]) == 4
+    assert not result["credits"] and not result["pending_counts"]
+    assert not result["evolution_state"]["discovery_buckets"]
+    assert all(
+        d["is_related"] is None and d["needs_new_skill"] is None
+        for d in result["semantic_gradients"]
+    )
+    cached = learning._diagnose(
+        group[0],
+        skill_segments(group[0])[0],
+        0.5,
+        SkillPool(),
+        RelatedEvolutionQueue(result["evolution_state"]),
+    )
+    assert cached["status"] == "diagnosis_unavailable"
+    assert len(calls) == 4
+
+
+def test_entry_context_resolves_transitive_artifact_producers():
+    from spatialcraft.knowledge.skill.segments import skill_segments
+
+    row, _parent = _row_with_prior_artifact_context(skill())
+    producer = row.transitions[1]
+    call = replace(
+        producer.action.tool_calls[0],
+        arguments={"source_points": "artifact://points-0.npy"},
+    )
+    producer = replace(producer, action=replace(producer.action, tool_calls=(call,)))
+    row = replace(row, transitions=(row.transitions[0], producer, *row.transitions[2:]))
+    context, prerequisites, images = learner([])._entry_context(
+        row, skill_segments(row)[-1]
+    )
+    assert [item["transition_id"] for item in prerequisites] == ["prior-0", "prior-1"]
+    assert context["omitted_prior_tool_observations"] == 0
+    assert {artifact["uri"] for _, artifact in images} >= {
+        "artifact://overlay-0.png",
+        "artifact://overlay-1.png",
+    }
+
+
+def test_entry_context_retains_available_spatial_evidence_without_tool_messages():
+    from spatialcraft.knowledge.skill.segments import skill_segments
+
+    row, _parent = _row_with_prior_artifact_context(skill())
+    final = row.transitions[-1]
+    active = replace(final.active_skill, activated_at_step=3)
+    final = replace(
+        final,
+        active_skill=active,
+        state_before=replace(final.state_before, active_skill=active, messages=()),
+    )
+    row = replace(row, transitions=(*row.transitions[:-1], final))
+    context, _, _ = learner([])._entry_context(row, skill_segments(row)[-1])
+    assert context["tool_observations"] == []
+    assert len(context["spatial_evidence"]) == 2
+    assert "PREREQUISITE_CENTER" in str(context["spatial_evidence"])

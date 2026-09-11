@@ -121,6 +121,11 @@ class KnowledgeGenerator:
                 "finish_reason": response.finish_reason,
                 "response_id": response.response_id,
                 "status": "validation_failed",
+                "provider_request_parameters": (
+                    response.raw.get("spatialcraft_request_parameters")
+                    if isinstance(response.raw, dict)
+                    else None
+                ),
             }
             try:
                 if isinstance(response.raw, dict) and response.raw.get(

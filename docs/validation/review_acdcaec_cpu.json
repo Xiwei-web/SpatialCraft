@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-09-11T14:54:26.115560+00:00",
+  "audit_commit": "acdcaec583aa0e60ac7483c372d45b5ef1ee8c36",
+  "base_commit": "acdcaec583aa0e60ac7483c372d45b5ef1ee8c36",
+  "source_state": "uncommitted_worktree_changes_on_base_commit",
+  "pytest": {
+    "tests": 413,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 413,
+    "warnings": 15,
+    "pytest_reported_seconds": 60.78,
+    "command": [
+      "/home/xiwei.liu/miniconda3/envs/spatialcraft/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=/home/xiwei.liu/spatialcraft/artifacts/v2_validation/review_acdcaec_cpu_final/pytest.xml"
+    ],
+    "environment": {
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONPATH": "src"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 63.291673903004266
+  },
+  "static_checks": {
+    "python_file_count": 27,
+    "ruff_check": "passed",
+    "ruff_format_check": "passed",
+    "git_diff_check": "passed"
+  },
+  "coverage": "CPU unit/integration tests with scripted model/API clients, tiny resource files and analytical geometry; no benchmark performance claim",
+  "real_gpu_or_paid_api_run": false,
+  "warning_sources": [
+    "torch NVML initialization",
+    "matplotlib/pyparsing deprecations"
+  ],
+  "changed_source_test_prompt_sha256": {
+    "prompts/skill/v2_semantic_gradient.txt": "eb52a35c151b4e06764199c89cadcd93d63faa5aa7cf4809d91865bb054e84d7",
+    "src/spatialcraft/evaluation/cost_report_v2.py": "964a09a087461bbd2cb88cdce72e70ec8e470772729a68e506b566f885765cea",
+    "src/spatialcraft/experiments/baseline_memory.py": "f15dd63fe52a737a4e7df10757ed4358721f9363f4000076402cf7f21c1cb9dd",
+    "src/spatialcraft/experiments/knowledge_generator.py": "101d7b2b336c0750fbe9af02c21e1b892a02b5441726a6bb70f9a6acbabccaa5",
+    "src/spatialcraft/experiments/learning_v2.py": "cb88cb4a8e534439e5e027282a0ea3a10fd46cd99d1b0930232530e5504760c1",
+    "src/spatialcraft/experiments/model_resources.py": "35654635128db9b663c8fd7f80056b5d45704dc8bbe77f2874d33b08e2641cc8",
+    "src/spatialcraft/experiments/prepare_v2.py": "c7473ef38fca8f2ad46d2a2740d035b93001197be0bb8505c3f34a6bcbb76156",
+    "src/spatialcraft/experiments/run.py": "3de307b400dfecb481dcb34f39846d7ac557d39da12e2b2e192be81c532db9d7",
+    "src/spatialcraft/experiments/run_frozen_transfer.py": "c0b645e4200d65eb7d137822572dd702bd12900c6d682524d69a08384d771d1d",
+    "src/spatialcraft/experiments/run_memory_baseline.py": "2fce20cdd31ef66e3f62a064d22a494b725d4287b31012d70069bcea0e9ddb04",
+    "src/spatialcraft/experiments/runtime_v2.py": "c387c18fb0f9208703d38873088ae9e81cb19d9c1aefff9b3af86e484efdf01f",
+    "src/spatialcraft/experiments/usage.py": "5b20a50e4fbf41af808490442d5a17694876b5647e949166ef68e30087f65b8b",
+    "src/spatialcraft/knowledge/evidence.py": "59bd5a54cbc92872259a8c46496bd3f7fa7a2beeb5ce7c0f9045adb20952e235",
+    "src/spatialcraft/knowledge/experience/learning_v2.py": "267adaa3f615e5e625aa20b2721d7c36429a618b30f69d99a84c0e61e3f89aae",
+    "src/spatialcraft/knowledge/skill/learning_v2.py": "1fae69619834b9f28bc94f49274dbeebf7df427a1194d4473e647c1dfa45fa66",
+    "src/spatialcraft/models/providers/openai_responses.py": "40cebcb890381e5bb269a6266467d34819d02365f9b831a6154e620d6e09e9a9",
+    "src/spatialcraft/tools/builtin/geometry.py": "8f9e08f82d9664e2f9df1650378855c0ac61acdb0e7dbb8ba4e648968b0cb82f",
+    "src/spatialcraft/tools/spatial_arrays.py": "f4db09576f05f813ce2e6b45b8b13210dd343ca8323aeb1c04dd2b03f5a559e8",
+    "tests/test_experience_v2.py": "92eeef7ef25c9289034e843b6955fba75a9edd123a1016b25d7fbfb3257816a6",
+    "tests/test_frozen_transfer_v2.py": "4c40a01c00f8aa2c61c2220ee52cb0d6087a4bd15c93187f842db3010bc3740f",
+    "tests/test_geometry_contract_r05.py": "91a6b856d2766134609ee96ad63334436b9219faab5eac41c2fbdf131441a6c8",
+    "tests/test_knowledge_evidence.py": "2b105c6e4665e96333660fb745d51db8472ce749966385628783f97cae6694de",
+    "tests/test_memory_baselines_v2.py": "e80f63f1c5a1078d4091e7ed7b6f0bd09bf3e354b091b2c9a34c529eef2cf46c",
+    "tests/test_model_resources_r08.py": "2be51afdf09ef4dee97de1bdf70f55166a23a5b60e35f821dd843adfc359ef4a",
+    "tests/test_preparation_v2.py": "2212424ae536180eb21ef4ce57a1b5336caac4e69f78de7600a8aa9f16e810c4",
+    "tests/test_review_usage_responses.py": "729215ad52711f18efc82b56b993948fae5849a1c90e752ae86141baf1ecf6e5",
+    "tests/test_skill_v2.py": "a556112bf6d3dee2c6855cc2a02e88dab6ab5170f807f3472330eaa343776721",
+    "tests/test_skill_validation_runtime_v2.py": "380a61c77b09256f8a7cd98bf2008c39ea5b9824576dae4c541f272df4de3fc3"
+  },
+  "local_artifacts": {
+    "artifacts/v2_validation/review_acdcaec_cpu_final/pytest.txt": "53df57f99b7efea5c0f2638ede83f5df42e11c5179a0d32a060e672bf3cd70cb",
+    "artifacts/v2_validation/review_acdcaec_cpu_final/pytest.xml": "25c70c26d225c19f747441acf0b49cbe753f95d12df4a0d7a9fcdf150478e6ef",
+    "artifacts/v2_validation/review_acdcaec_cpu_final/execution.json": "8251b9835e7db240c2e4ed701e089f529d39fa7fb2b900a81bc4ffe1291a0b20",
+    "artifacts/v2_validation/review_acdcaec_cpu_final/static_checks.json": "1694f2e24817aa39e26c7a14c1cfb9ca1ba856bd6132d857681cd4df10cb4da2"
+  },
+  "artifact_portability": "This small summary is in docs/validation and is reviewable with source; raw artifacts remain local and are git-ignored."
+}

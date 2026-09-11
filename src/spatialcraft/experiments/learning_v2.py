@@ -1,11 +1,32 @@
 """Runtime bridge for operation-scoped Experience and Skill learning."""
 
+from functools import wraps
+
+from spatialcraft.knowledge.evidence import render_action
 from spatialcraft.knowledge.experience.learning_v2 import ExperienceLearningV2
 from spatialcraft.knowledge.skill.learning_v2 import SkillLearningV2
 from spatialcraft.models import ContentPart
 from spatialcraft.models.scoring.target_logprob import TargetLogprobScorer
 
 from .knowledge_generator import KnowledgeValidationError
+
+
+def _scoped_embedding_operation(operation):
+    """A cached stage must not change metadata of later model requests."""
+
+    def decorate(method):
+        @wraps(method)
+        def scoped(self, *args, **kwargs):
+            previous = self.generator.scope
+            self.generator.scope = {**previous, "embedding_operation": operation}
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                self.generator.scope = previous
+
+        return scoped
+
+    return decorate
 
 
 class LearningBuildersV2:
@@ -69,8 +90,8 @@ class LearningBuildersV2:
     def set_scope(self, **scope):
         self.generator.scope = scope
 
+    @_scoped_embedding_operation("retrieval.index_and_query")
     def retrieve(self, task, knowledge):
-        self.generator.scope["embedding_operation"] = "retrieval.index_and_query"
         if self.settings.ablations.get("no_experience"):
             return {
                 "experiences": [],
@@ -159,8 +180,8 @@ class LearningBuildersV2:
             "state": state.to_dict(),
         }, media
 
+    @_scoped_embedding_operation("skill.selection")
     def applicable(self, candidates, task, state):
-        self.generator.scope["embedding_operation"] = "skill.selection"
         payload, media = self._public(task, state)
         available = {s.reference for s in candidates}
         payload.update(
@@ -196,7 +217,7 @@ class LearningBuildersV2:
         payload, media = self._public(task, state)
         payload.update(
             skill=skill.to_dict(),
-            action=action.to_dict(),
+            action=render_action(action),
             expected_output={"terminate": "boolean"},
         )
 

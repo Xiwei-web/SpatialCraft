@@ -543,3 +543,41 @@ def test_provider_value_error_is_not_a_knowledge_validation_skip():
 
     with pytest.raises(ValueError, match="unsupported provider configuration"):
         ExperienceLearningV2(unavailable, ConstantEmbedder()).update(state, rows(state))
+
+
+def test_summary_and_reflection_use_same_clean_evidence_without_modifying_audit():
+    import json
+
+    from test_knowledge_evidence import observed_row
+    from test_memory_baselines_v2 import Responses
+
+    from spatialcraft.experiments.baseline_memory import (
+        MemoryBaselineConfig,
+        MemoryBaselineLearner,
+    )
+
+    state = knowledge()
+    row = observed_row(rows(state)[0], raw=True)
+    original = row.to_dict()
+    generator = Generator()
+    learner = ExperienceLearningV2(generator, ConstantEmbedder())
+    learner._summary(row, state)
+    summary = generator.calls[0][1]
+    reflected = Responses()
+    baseline = MemoryBaselineLearner(
+        MemoryBaselineConfig("memp_reflection"),
+        generate=reflected,
+        embedder=ConstantEmbedder(),
+    )
+    baseline._reflection(row)
+    reflection = reflected.calls[0][1]
+    baseline._workflows(state, (row,), 0)
+    workflow = reflected.calls[1][1]
+    for payload in (summary, reflection, workflow):
+        text = json.dumps(payload)
+        assert "RAW_AUDIT_MUST_NOT_BE_PROMPT" not in text
+        assert "token_ids" not in text and "raw_response" not in text
+        assert "2.5" in text and "estimated_metric" in text
+        assert payload["task"]["reference_answer"] == "PRIVATE_REFERENCE"
+    assert summary["steps"][0]["action"] == reflection["steps"][0]["action"]
+    assert row.to_dict() == original

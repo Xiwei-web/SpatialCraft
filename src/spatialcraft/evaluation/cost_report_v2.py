@@ -6,6 +6,15 @@ from pathlib import Path
 
 from spatialcraft.storage.atomic_io import read_json
 
+# Schema 3 totals describe arithmetic token work, not equivalent money or FLOPs.
+KIND_TOKEN_FIELDS = {
+    "generation_input_tokens": ("generation", "input_tokens"),
+    "generation_output_tokens": ("generation", "output_tokens"),
+    "generation_total_tokens": ("generation", "total_tokens"),
+    "embedding_input_tokens": ("embedding", "input_tokens"),
+    "scoring_prefix_tokens": ("fixed_target_score", "input_tokens"),
+    "scoring_target_tokens": ("fixed_target_score", "target_tokens"),
+}
 FIELDS = (
     "input_tokens",
     "output_tokens",
@@ -13,28 +22,62 @@ FIELDS = (
     "reasoning_tokens",
     "cached_input_tokens",
     "target_tokens",
+    *KIND_TOKEN_FIELDS,
     "latency_ms",
+    "full_call_latency_ms",
+    "provider_latency_ms",
 )
 
 
 def _applicable(event, field):
     kind = event.get("kind")
-    if str(kind).startswith("tool") and field != "latency_ms":
+    if field in KIND_TOKEN_FIELDS:
+        return kind == KIND_TOKEN_FIELDS[field][0]
+    if field == "provider_latency_ms":
+        return kind == "generation"
+    if field in {"latency_ms", "full_call_latency_ms", "count"}:
+        return True
+    if str(kind).startswith("tool"):
         return False
-    if (
-        field
-        in {"output_tokens", "reasoning_tokens", "cached_input_tokens", "total_tokens"}
-        and kind == "embedding"
-    ):
-        return field in event
-    if (
-        field in {"reasoning_tokens", "cached_input_tokens", "total_tokens"}
-        and kind == "fixed_target_score"
-    ):
-        return field in event
-    if field == "target_tokens" and kind != "fixed_target_score":
-        return field in event
+    if field == "total_tokens":
+        return kind in {"generation", "embedding", "fixed_target_score"}
+    if kind == "embedding" and field in {
+        "output_tokens",
+        "reasoning_tokens",
+        "cached_input_tokens",
+        "target_tokens",
+    }:
+        return False
+    if kind == "fixed_target_score" and field in {
+        "reasoning_tokens",
+        "cached_input_tokens",
+    }:
+        return False
+    if field == "target_tokens":
+        return kind == "fixed_target_score"
     return True
+
+
+def _event_value(event, field):
+    if field in KIND_TOKEN_FIELDS:
+        field = KIND_TOKEN_FIELDS[field][1]
+    if field != "total_tokens":
+        return event.get(field)
+    kind = event.get("kind")
+    if kind == "embedding":
+        return event.get("input_tokens")
+    if kind == "generation" and event.get("total_tokens") is not None:
+        return event["total_tokens"]
+    parts = (
+        "input_tokens",
+        "target_tokens" if kind == "fixed_target_score" else "output_tokens",
+    )
+    values = [event.get(k) for k in parts]
+    if any(v is None for v in values):
+        return None
+    if any(type(v) not in (int, float) or not isfinite(v) or v < 0 for v in values):
+        raise ValueError("Invalid constituent token count")
+    return sum(values)
 
 
 def _measure(events, field):
@@ -45,7 +88,7 @@ def _measure(events, field):
             continue
         # A logical cache reuse incurs zero incremental token cost; source
         # response usage must not be charged again, even if present in old logs.
-        value = 0 if event.get("cache_reused") else event.get(field)
+        value = 0 if event.get("cache_reused") else _event_value(event, field)
         if value is None:
             unknown += 1
         elif not isinstance(value, (int, float)) or not isfinite(value) or value < 0:
@@ -255,7 +298,7 @@ def build_cost_report(root, deployment_count=None):
     amortized = _normalize(offline_summary, deployment_count)
     online_mean = _normalize(online_summary, len(online_task_ids), unattributed_online)
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "groups": rows,
         "per_task": _task_rows(all_events),
         "deployment_count": deployment_count,
@@ -281,7 +324,12 @@ def build_cost_report(root, deployment_count=None):
         "token_source": "provider_or_executor_tokenizer_only",
         "prices_included": False,
         "gpu_resource_cost_included": False,
-        "latency_definition": "sum_of_invocation_latency_not_parallel_wall_time",
+        "total_tokens_definition": "generation_total_tokens + embedding_input_tokens + scoring_prefix_tokens + scoring_target_tokens; reasoning tokens are already part of generation output",
+        "token_work_is_equivalent_cost": False,
+        "scoring_prefix_definition": "teacher-forced prompt including fixed generated prefix; target counted separately",
+        "latency_definition": "sum of recorded invocation latency; historical records may have provider-only scope; not task or parallel wall time",
+        "full_call_latency_definition": "wrapper elapsed time including preprocessing, tokenization and decoding, excluding journal bookkeeping; unavailable for historical records without the explicit field",
+        "provider_latency_definition": "generation provider's own reported internal latency, when available",
         "online_mean_definition": "all_observed_online_cost / distinct_observed_deployment_task_ids; null if any event lacks task_id; zero-invocation tasks are not inferred",
         "amortization_definition": "offline_cost / deployment_count + observed_mean_online_cost",
         "rollout_allocation": "task events counted once; shared calls are not duplicated or allocated across rollouts",

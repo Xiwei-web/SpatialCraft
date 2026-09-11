@@ -18,6 +18,7 @@ from spatialcraft.tools.real.common import SpatialToolPaths
 from .journal import digest
 from .prepare import DATASET_ORDER
 from .prepare_v2 import DATASETS as V2_DATASETS
+from .prepare_v2 import validate_content_isolation
 from .protocol import public_task
 from .settings import ExperimentSettings
 
@@ -82,7 +83,7 @@ def check_runtime_initialization(project: Path, settings, binding, names):
 def preflight(project: Path, preparation: Path, config_path: Path, names=None):
     settings = ExperimentSettings.load(config_path)
     manifest = read_json(preparation / "manifest.json")
-    datasets = {}
+    datasets, content_isolation = {}, {}
     supported = V2_DATASETS if settings.is_v2 else DATASET_ORDER
     selected = tuple(
         (
@@ -142,6 +143,12 @@ def preflight(project: Path, preparation: Path, config_path: Path, names=None):
             r.task_id for r in splits["deployment"]
         }:
             raise ValueError("Training/deployment task IDs overlap")
+        if settings.is_v2:
+            isolation = validate_content_isolation(
+                manifest, name, splits["environment"], splits["deployment"]
+            )
+            if isolation is not None:
+                content_isolation[name] = isolation
         datasets[name] = splits
     model = ModelConfig.from_dict(
         load_yaml(project / f"configs/models/{settings.backbone}.yaml")
@@ -251,9 +258,15 @@ def preflight(project: Path, preparation: Path, config_path: Path, names=None):
             "output_budget_includes_thinking": True,
         },
     }
+    if content_isolation:
+        binding["content_isolation"] = content_isolation
     if settings.is_v2:
+        from .model_resources import resolve_role_models, role_model_resources
         from .operation_profiles import resolved_configuration
 
+        binding["model_resources"] = role_model_resources(
+            resolve_role_models(project, settings)
+        )
         binding["resolved_protocol"] = resolved_configuration(settings)
         binding["evolution_protocol"].update(
             batch_unit="distinct_semantically_related_trajectories_per_target_version",
@@ -371,17 +384,9 @@ def main():
     for path, checksum in media.items():
         if checksum is None or sha256_file(path) != checksum:
             raise ValueError("Dataset image checksum changed")
-    model_path = Path(binding["model_path"])
-    shards = sorted(
-        set(
-            read_json(model_path / "model.safetensors.index.json")[
-                "weight_map"
-            ].values()
-        )
-    )
-    binding["weights_sha256"] = {
-        shard: sha256_file(model_path / shard) for shard in shards
-    }
+    from .model_resources import complete_model_resource_binding
+
+    complete_model_resource_binding(binding)
     paths = SpatialToolPaths.from_env()
     print(
         "Binding spatial-tool checkpoint hashes before any external API call...",

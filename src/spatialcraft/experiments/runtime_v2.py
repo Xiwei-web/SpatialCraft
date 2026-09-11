@@ -35,7 +35,7 @@ from .learning_v2 import LearningBuildersV2
 from .operation_profiles import operation_profile, resolved_configuration
 from .reasoning_modes_v2 import validate_operation_model
 from .rollout import JournaledRollout
-from .usage import AuditedProviderV2, ScopedEmbedder, UsageLedger, cost_report
+from .usage import AuditedProviderV2, ScopedEmbedder, UsageLedger, _elapsed, cost_report
 
 
 def build_dataset(runtime, name):
@@ -112,6 +112,9 @@ def build_dataset(runtime, name):
         profile = operation_profile(settings, operation)
         validate_operation_model(models[profile.role], profile)
     resolved["active_operations"] = sorted(active_operations)
+    from .model_resources import validate_runtime_model_resources
+
+    resource_audit = validate_runtime_model_resources(models, runtime.binding)
     journal = RunJournal(
         runtime.output / name,
         {
@@ -120,6 +123,7 @@ def build_dataset(runtime, name):
             "settings": resolved,
             "model_local": asdict(runtime.model.local),
             "embedding_identity": runtime.embedder.identity,
+            "model_resource_verification": resource_audit,
             "role_models": {
                 role: {
                     "alias": config.alias,
@@ -166,7 +170,7 @@ def build_dataset(runtime, name):
                         "status": "failed",
                         "error_type": type(exc).__name__,
                         "actual_call": True,
-                        "latency_ms": (perf_counter() - started) * 1000,
+                        **_elapsed(started),
                     }
                 )
                 raise
@@ -177,7 +181,7 @@ def build_dataset(runtime, name):
                     "operation": call.tool_name,
                     "status": result.status.value,
                     "actual_call": True,
-                    "latency_ms": (perf_counter() - started) * 1000,
+                    **_elapsed(started),
                 }
             )
             return result

@@ -9,12 +9,99 @@ from pathlib import Path
 from spatialcraft.datasets import create_default_registry
 from spatialcraft.datasets.normalizer import ImageMaterializer
 from spatialcraft.schemas import TaskSplit
-from spatialcraft.storage.atomic_io import canonical_json_bytes, file_lock, sha256_bytes
+from spatialcraft.storage.atomic_io import (
+    canonical_json_bytes,
+    file_lock,
+    sha256_bytes,
+    sha256_file,
+)
 
 from .prepare import _content_keys, _image_keys, _immutable, file_record
 from .protocol import public_task, split_category, stratified_halves
 
 DATASETS = ("robospatial", "erqa", "omni3d", "sat", "viewspatial")
+
+
+EXACT_DUPLICATE_POLICY = "reject_cross_split_v1"
+CONTENT_FINGERPRINT = "question_ordered_image_sha256_choices_v1"
+
+
+def public_content_fingerprints(tasks, *, image_hashes=None):
+    """Content-only fingerprints from actual local image bytes, never labels/IDs.
+
+    Image ordering and exact question/choice text matter. Shared images with
+    different questions are not duplicate tasks. Strict mode requires readable
+    local media; it does not download or trust an unverified image URI/hash.
+    """
+    hashes = {} if image_hashes is None else image_hashes
+    fingerprints = {}
+    for task in tasks:
+        images = []
+        for image in task.images:
+            if image.uri not in hashes:
+                path = Path(image.uri)
+                if not path.is_file():
+                    raise ValueError(
+                        "Strict content isolation requires readable local task images"
+                    )
+                hashes[image.uri] = sha256_file(path)
+            checksum = hashes[image.uri]
+            if image.sha256 is not None and checksum != image.sha256:
+                raise ValueError("Strict content isolation image checksum changed")
+            images.append(checksum)
+        fingerprints[task.task_id] = sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "question": task.question,
+                    "images": images,
+                    "choices": task.choices,
+                }
+            )
+        )
+    return fingerprints
+
+
+def strict_content_isolation(environment, deployment):
+    hashes = {}
+    training = public_content_fingerprints(environment, image_hashes=hashes)
+    heldout = public_content_fingerprints(deployment, image_hashes=hashes)
+    duplicates = set(training.values()) & set(heldout.values())
+    if duplicates:
+        raise ValueError(
+            f"Exact public task content overlaps training/deployment ({len(duplicates)} groups); strict policy rejects this split without repartitioning"
+        )
+    shared_images = len(
+        {hashes[image.uri] for task in environment for image in task.images}
+        & {hashes[image.uri] for task in deployment for image in task.images}
+    )
+    return {
+        "policy": EXACT_DUPLICATE_POLICY,
+        "fingerprint": CONTENT_FINGERPRINT,
+        "training_task_content_sha256": training,
+        "deployment_task_content_sha256": heldout,
+        "shared_image_count": shared_images,
+        "shared_question_image_choices_count": 0,
+    }
+
+
+def validate_content_isolation(manifest, name, environment, deployment):
+    """Recompute an explicit strict claim; absence keeps historical report-only policy."""
+    protocol = manifest.get("split_protocol", {})
+    policy = protocol.get("exact_duplicate_policy", "report_only")
+    if policy == "report_only":
+        return None
+    if (
+        policy != EXACT_DUPLICATE_POLICY
+        or protocol.get("content_fingerprint") != CONTENT_FINGERPRINT
+    ):
+        raise ValueError("Unsupported exact-duplicate isolation declaration")
+    audit = strict_content_isolation(environment, deployment)
+    for key in ("shared_image_count", "shared_question_image_choices_count"):
+        if manifest["datasets"][name].get(key) != audit[key]:
+            raise ValueError(
+                "Declared content isolation counts differ from actual prepared inputs"
+            )
+    return audit
 
 
 def sat_splits(validation, test, seed=42):
@@ -51,7 +138,17 @@ def sat_splits(validation, test, seed=42):
     )
 
 
-def write_preparation(output, sources, *, sat_validation=(), seed=42, provenance=None):
+def write_preparation(
+    output,
+    sources,
+    *,
+    sat_validation=(),
+    seed=42,
+    provenance=None,
+    exact_duplicate_policy="report_only",
+):
+    if exact_duplicate_policy not in {"report_only", EXACT_DUPLICATE_POLICY}:
+        raise ValueError("Unknown exact-duplicate preparation policy")
     names = tuple(name for name in DATASETS if name in sources)
     if not names or set(sources) - set(DATASETS):
         raise ValueError("Select supported datasets")
@@ -64,6 +161,11 @@ def write_preparation(output, sources, *, sat_validation=(), seed=42, provenance
             sat_splits(tuple(sat_validation), rows, seed)
             if name == "sat"
             else stratified_halves(rows, seed=seed)
+        )
+        isolation = (
+            strict_content_isolation(environment, deployment)
+            if exact_duplicate_policy == EXACT_DUPLICATE_POLICY
+            else None
         )
         for split, values in (("environment", environment), ("deployment", deployment)):
             for folder, data in (
@@ -94,6 +196,9 @@ def write_preparation(output, sources, *, sat_validation=(), seed=42, provenance
                 len(r.images) for r in (*environment, *deployment)
             ),
         }
+        if isolation is not None:
+            for key in ("shared_image_count", "shared_question_image_choices_count"):
+                counts[name][key] = isolation[key]
     manifest = {
         "schema_version": 2,
         "status": "prepared_not_run",
@@ -113,6 +218,12 @@ def write_preparation(output, sources, *, sat_validation=(), seed=42, provenance
             for name, value in sorted(payloads.items())
         },
     }
+    if exact_duplicate_policy == EXACT_DUPLICATE_POLICY:
+        manifest["split_protocol"].update(
+            exact_duplicate_policy=EXACT_DUPLICATE_POLICY,
+            content_fingerprint=CONTENT_FINGERPRINT,
+            repartitioned_for_duplicates=False,
+        )
     output = Path(output)
     with file_lock(output / ".preparation.lock"):
         if (output / "manifest.json").exists() and (
@@ -133,6 +244,12 @@ def main():
     )
     parser.add_argument("--datasets", nargs="+", choices=DATASETS, default=DATASETS)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--exact-duplicate-policy",
+        choices=("report_only", EXACT_DUPLICATE_POLICY),
+        default="report_only",
+        help="Opt-in strict rejection of cross-split exact public task duplicates; never silently repartitions",
+    )
     args = parser.parse_args()
     if len(set(args.datasets)) != len(args.datasets):
         parser.error("Duplicate dataset names")
@@ -180,6 +297,7 @@ def main():
         sat_validation=validation,
         seed=args.seed,
         provenance=provenance,
+        exact_duplicate_policy=args.exact_duplicate_policy,
     )
     print(
         {

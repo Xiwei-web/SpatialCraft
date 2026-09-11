@@ -6,7 +6,7 @@
 
 | 方法标识 | 实际学习与检索路径 | 与原方案的边界 |
 |---|---|---|
-| `rag_demonstrations` | 环境集执行时不检索记忆；仅把验证成功的示例及动作序列加入演示库。部署时按原问题 embedding Top-k 检索，无反思/重写。 | 在同一空间工具协议下构建演示库；不等于任何特定 RAG 论文复现。长示例超出明确保存预算时拒绝保存并记录。 |
+| `rag_demonstrations` | 环境集执行时不检索记忆；仅把验证成功的公开任务、动作参数、工具观察及最终回答加入演示库。部署时按原问题 embedding Top-k 检索，无反思/重写。 | 在同一空间工具协议下构建演示库；不等于任何特定 RAG 论文复现。长示例超出明确保存预算时拒绝保存并记录。 |
 | `memp_reflection` | 对每条完成的成功/失败轨迹独立调用 LLM，生成零或一条条件＋程序记忆；直接语义检索。 | 不做跨 rollout Critique、Skill 语义梯度或 PPO；使用统一空间执行器的 MemP-inspired 适配。 |
 | `memrl_reward` | 使用独立反思记忆；先语义候选检索，再按 `(1-w)cosine + w empirical_return` 重排。历史注入后的结果更新经验平均值。 | 描述性经验结果关联，不宣称因果收益，也不是原论文 Q-learning 公式的忠实实现。 |
 | `sma_procedure` | 仅成功轨迹产生程序记忆；其后训练注入结果校准可靠度；按 `max(0,cosine) × (reward_sum+1)/(count+2)` 排序。 | 明确采用本适配的 Laplace 平滑；单 pass、最终快照，不采用原论文多轮最佳 checkpoint 协议。 |
@@ -72,3 +72,9 @@ Skill-Pro adapter 还为已提交的训练轨迹写入 `stages/tasks/<task>/roll
 ## Backbone 支持范围
 
 上述六条记忆基线的 `run_memory_baseline` 入口目前使用本地 v2 Runtime，支持 Qwen3.5-9B 与 Qwen3.6-27B；不支持 API-only executor。配置远程 knowledge builder 不等于支持远程 executor。独立 GPT direct、tool-only ReAct 或 `RAG/` 的 API baseline 使用各自入口，不能据此声称这六种记忆适配已经支持 API backbone。该边界属于当前实现范围，尚未执行全 baseline 实验。
+
+## 二次复审后的示例预算与容量
+
+`rag_demonstrations` 保存专用语义表示，排除 raw response、token IDs、评分输入及运行时间戳；原始 journal 仍保留这些复现字段。正式 Runtime 用实际执行器 tokenizer 限制完整注入文本（默认 1024 tokens）。无 tokenizer 的通用测试适配明确回退为 256 words，不把 word 当 token。超长示例仍会拒绝，`results/memory_construction.json` 与 journal 的 construction 阶段报告成功轨迹、候选示例、拒绝/保存/当前有效示例数及部署命中；这不保证所有成功轨迹都适合当前预算。
+
+Skill-Pro 的 `--skill-capacity` 在创建 Runtime 前写入唯一有效 settings，并检查已绑定 evolver 容量一致。六种子协议拒绝小于 6 的容量；容量 10 的回归实际把超容 Skill 池修剪到 10。详情见 [复审说明](review_acdcaec_fixes.md)。

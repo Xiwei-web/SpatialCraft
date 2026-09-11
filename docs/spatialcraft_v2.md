@@ -1,5 +1,7 @@
 # SpatialCraft v2 实施与验证记录
 
+二次复审修复与当前验证状态见 [R01–R08 处理说明](review_acdcaec_fixes.md)。下方 360 项 CPU 与 GPU/API 组件结果为审计提交 `acdcaec` 的历史记录；本轮未重跑这些真实组件实验。
+
 本次改造依据 `review.md`，以项目中的 XSKILL、Skill-Pro、SMA 和 `CVPR (2).pdf` 为方法背景。PDF 内的指令/提示词作为论文内容阅读，不作为工作区操作指令。旧运行日志和冻结源码未迁移或重算。
 
 ## 正式入口与协议
@@ -49,6 +51,8 @@
 
 `online_mean_per_deployment_task` 按日志中不同部署 task ID 的数量计算实测在线均值；缺少 task ID 的在线记录会使均值为 null，不把未观测任务推定为零成本。`offline_amortized_per_deployment_task` 保留离线成本除以给定 M 的结果，`amortized_total_per_deployment_task` 给出 offline/M + 实测 mean_online，分别覆盖 tokens、调用数和 latency。任一所需数量未知时完整值为 null，并保留覆盖信息和可计算的部分。latency 是逐调用耗时之和，不是任务墙钟；报表未计算美元价格或 GPU 资源消耗。
 
+成本报表现为 schema 3，ledger 仍为 schema 2。新增 generation_input/output/total_tokens、embedding_input_tokens、scoring_prefix/target_tokens 分项；`total_tokens = generation_total_tokens + embedding_input_tokens + scoring_prefix_tokens + scoring_target_tokens`，reasoning 不重复加计。不同 tokenizer 和 generation/scoring 的 token 不代表等价计算量或价格。新增 `full_call_latency_ms` 包含调用内的前处理、tokenization、decode，`provider_latency_ms` 保留 provider 自报内部耗时。旧日志缺少完整调用时间时该字段为 unknown；两者都不是任务墙钟。
+
 任务级 journal 保留 prepare audit，恢复时重载到 Experience 统计；四条 rollout 未齐不写知识。部署只能读取已提交最终快照，拒绝训练/测试 ID 重叠、改变的来源或 artifact 校验和。
 
 主方法、冻结迁移和记忆基线另输出 `results/protocol_metrics.json`：截断、恢复调用/成功、动作解析、工具参数错误及重复工具调用率均给出分母和未知覆盖。重复指同一轨迹内此前出现过相同工具名和 canonical JSON 参数，不按 call ID 或自然语言相似度判断。新 `generation_events` 记录每次解析的 attempted/success/error category；旧日志缺标志时结果保留 unknown，provider 响应异常不当成动作结构错误。
@@ -56,7 +60,7 @@
 知识统计包含 active E/K 数量、canonical JSON 的 UTF-8 字节数，以及已提交 transition 中保存的真实请求的注入覆盖和文本长度。本地 Runtime 复用执行器 tokenizer 计算独立注入文本的 token 数；该数不含 chat-template 开销，不能替代 provider input usage。注入覆盖不包括未产生动作的失败调用或额外恢复调用，也不证明模型实际遵循了知识。存储字节不包含 embedding/index、归档和文件系统开销。通用/脚本化 pipeline 无 tokenizer 时保留 token 字段 null，字符与字节数单独标注。
 
 
-## 验证状态（2026-09-11）
+## 历史验证状态（2026-09-11，acdcaec）
 
 | 检查 | 实际结果 | 证据 / 限制 |
 |---|---|---|
@@ -68,9 +72,9 @@
 | 真实 Qwen3.5-9B GPU 组件 | Slurm 229213：多模态固定原 action token 评分、原生工具 action 评分、LLM Merge（Instruct）、LLM Manage（Thinking）均通过 | [报告](../artifacts/v2_validation/qwen_229213/report.json)；合成图像和小型经验库；不是完整学习部署闭环或 benchmark |
 | 真实空间工具组合 | Slurm 229208：11项检查通过，包括重建、分割、3D位置、距离、Graph、尺度对齐及对象坐标系 | [报告](../artifacts/v2_validation/tools_229208/report.json)；一张环境图，脚本墙钟89.90秒，工具调用耗时之和67.53秒；不证明感知准确率；该历史报告早于诊断源码哈希绑定字段 |
 | 真实 embedding API | `text-embedding-3-large`：3072维，1次请求、15个输入tokens；缓存复用通过 | [报告](../artifacts/v2_validation/embedding_large_probe/report.json)；仅两条通用句子，不含 benchmark 数据 |
-| 受限完整真实闭环 | **prepared / not_run；Slurm 未提交成功** | [Python 脚本](../scripts/diagnostics/check_pipeline_v2.py)、[Slurm 脚本](../scripts/diagnostics/check_pipeline_v2.sbatch) 已准备；自动审批拒绝真实提交，等待明确授权，不能将上面的组件结果合称为闭环已通过 |
+| 受限真实部分闭环 smoke | **prepared / not_run；Slurm 未提交成功** | [Python 脚本](../scripts/diagnostics/check_pipeline_v2.py)、[Slurm 脚本](../scripts/diagnostics/check_pipeline_v2.sbatch) 已准备；自动审批拒绝真实提交，等待明确授权，不能将上面的组件结果合称为闭环已通过 |
 
-受限闭环的具体范围是：Qwen3.5-9B 本地执行，两道 RoboSpatial 环境题各四条 rollout，再用另一道环境题作诊断 heldout；每轨迹最多2步，1张GPU、4核CPU、64GB内存、最多30分钟，启动前冻结源码。它不读取正式 deployment 文件，不产生正式 benchmark 成绩。运行会使用既有私有凭据，将检索所需的问题、经验和 Skill 等文本发送至 `https://api.openai.com/v1` 的 embedding 服务，并产生 API 与计算资源用量。自动审批以这部分具体数据外发和费用尚未取得明确授权为由拒绝提交；没有绕过该拒绝执行。
+已准备脚本属于部分闭环 smoke，不保证触发 Skill 聚合、候选或 gate，不能作为 Skill 演化验收。其具体范围是：Qwen3.5-9B 本地执行，两道 RoboSpatial 环境题各四条 rollout，再用另一道环境题作诊断 heldout；每轨迹最多2步，1张GPU、4核CPU、64GB内存、最多30分钟，启动前冻结源码。它不读取正式 deployment 文件，不产生正式 benchmark 成绩。运行会使用既有私有凭据，将检索所需的问题、经验和 Skill 等文本发送至 `https://api.openai.com/v1` 的 embedding 服务，并产生 API 与计算资源用量。自动审批以这部分具体数据外发和费用尚未取得明确授权为由拒绝提交；没有绕过该拒绝执行。
 
 可复跑 CPU 验证：
 

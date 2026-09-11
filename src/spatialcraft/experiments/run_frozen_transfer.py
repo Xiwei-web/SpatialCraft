@@ -22,7 +22,12 @@ from spatialcraft.storage.atomic_io import (
 from .accumulation import KnowledgeState
 from .journal import _execution_revision, digest
 from .operation_profiles import operation_profile, resolved_configuration
-from .prepare_v2 import DATASETS
+from .prepare_v2 import (
+    CONTENT_FINGERPRINT,
+    DATASETS,
+    EXACT_DUPLICATE_POLICY,
+    public_content_fingerprints,
+)
 from .run import load_api_key_file, preflight
 from .run_memory_baseline import bind_inference_resources
 
@@ -154,6 +159,29 @@ def read_frozen_source(path, expected_snapshot_id=None):
         "knowledge_sha256": digest(final),
         "source_files_sha256": hashes,
     }
+    isolation = effective_binding.get("content_isolation", {}).get(dataset)
+    if isolation is not None:
+        training = isolation.get("training_task_content_sha256", {})
+        if (
+            isolation.get("policy") != EXACT_DUPLICATE_POLICY
+            or isolation.get("fingerprint") != CONTENT_FINGERPRINT
+            or not isinstance(training, dict)
+            or not set(ids) <= set(training)
+            or any(
+                not isinstance(training[identifier], str)
+                or len(training[identifier]) != 64
+                or any(c not in "0123456789abcdef" for c in training[identifier])
+                for identifier in ids
+            )
+        ):
+            raise ValueError("Source strict content-isolation binding is invalid")
+        provenance["source_content_isolation"] = {
+            "policy": EXACT_DUPLICATE_POLICY,
+            "fingerprint": CONTENT_FINGERPRINT,
+            "training_task_content_sha256": {
+                identifier: training[identifier] for identifier in ids
+            },
+        }
     return FrozenSource(root, knowledge, dataset, tuple(ids), provenance, hashes)
 
 
@@ -178,6 +206,15 @@ def validate_target_tasks(source, tasks):
         raise ValueError("Transfer accepts deployment/test tasks only")
     if set(source.training_task_ids).intersection(task.task_id for task in tasks):
         raise ValueError("Transfer deployment overlaps source training task IDs")
+    isolation = source.provenance.get("source_content_isolation")
+    if isolation is not None:
+        heldout = public_content_fingerprints(tasks)
+        if set(heldout.values()) & set(
+            isolation["training_task_content_sha256"].values()
+        ):
+            raise ValueError(
+                "Transfer deployment exact public task content overlaps source training"
+            )
 
 
 def target_contract(project, settings, source, *, token_counter=None):
