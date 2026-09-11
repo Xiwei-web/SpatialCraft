@@ -307,8 +307,10 @@ class ResponseToolCall:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TokenUsage:
-    input_tokens: int = 0
-    output_tokens: int = 0
+    """Provider-reported counts; absent usage is unknown, never a zero claim."""
+
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     total_tokens: int | None = None
     reasoning_tokens: int | None = None
     cached_input_tokens: int | None = None
@@ -317,17 +319,23 @@ class TokenUsage:
         values = (
             self.input_tokens,
             self.output_tokens,
-            self.reasoning_tokens or 0,
-            self.cached_input_tokens or 0,
+            self.total_tokens,
+            self.reasoning_tokens,
+            self.cached_input_tokens,
         )
-        if any(value < 0 for value in values):
-            raise ValueError("token counts cannot be negative")
-        total = self.total_tokens
-        if total is None:
-            total = self.input_tokens + self.output_tokens
-            object.__setattr__(self, "total_tokens", total)
-        if total < 0:
-            raise ValueError("total_tokens cannot be negative")
+        if any(
+            value is not None and (type(value) is not int or value < 0)
+            for value in values
+        ):
+            raise ValueError("token counts must be nonnegative integers or unknown")
+        if (
+            self.total_tokens is None
+            and self.input_tokens is not None
+            and self.output_tokens is not None
+        ):
+            object.__setattr__(
+                self, "total_tokens", self.input_tokens + self.output_tokens
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

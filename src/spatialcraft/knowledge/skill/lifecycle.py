@@ -11,6 +11,7 @@ from spatialcraft.schemas import (
     AgentAction,
     SkillItem,
     SpatialState,
+    TaskSample,
 )
 
 
@@ -27,6 +28,10 @@ class SkillLifecyclePolicy:
         Callable[[SkillItem, SpatialState, AgentAction], bool] | None
     ) = None
 
+    task_condition_evaluator: (
+        Callable[[TaskSample, SkillItem, SpatialState, AgentAction], bool] | None
+    ) = None
+
     def __post_init__(self) -> None:
         if self.max_lifetime_steps < 1:
             raise ValueError("max_lifetime_steps must be positive")
@@ -37,6 +42,8 @@ class SkillLifecyclePolicy:
         active: ActiveSkillRef,
         state: SpatialState,
         action: AgentAction,
+        *,
+        task: TaskSample | None = None,
     ) -> TerminationDecision:
         if action.action_type is ActionType.FINAL:
             return TerminationDecision(True, "agent_final_answer")
@@ -46,6 +53,12 @@ class SkillLifecyclePolicy:
             return TerminationDecision(True, "action_requested")
         if bool(state.metadata.get("skill_done")):
             return TerminationDecision(True, "state_requested")
+        if self.task_condition_evaluator is not None:
+            if task is None:
+                raise ValueError("Task-aware termination requires the task view")
+            if self.task_condition_evaluator(task, skill, state, action):
+                return TerminationDecision(True, "skill_termination_condition")
+            return TerminationDecision(False)
         if self.condition_evaluator is not None and self.condition_evaluator(
             skill, state, action
         ):

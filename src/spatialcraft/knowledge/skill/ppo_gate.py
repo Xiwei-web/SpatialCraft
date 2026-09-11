@@ -221,3 +221,217 @@ __all__ = [
     "PPOGateResult",
     "SurrogateSkillGate",
 ]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SequenceLikelihoodExample:
+    """A recorded action span; every trajectory receives equal total weight."""
+
+    trajectory_id: str
+    transition_id: str
+    base_request: ModelRequest
+    target_text: str
+    target_token_ids: tuple[int, ...]
+    advantage: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SequenceLikelihoodResult:
+    accepted_candidate_id: str | None
+    records: tuple[dict, ...]
+
+
+class LikelihoodScoreRejected(ValueError):
+    """A computed candidate score is invalid; provider failures still propagate."""
+
+
+class SequenceLikelihoodGate:
+    """PPO-style raw-model sequence-likelihood surrogate, not sampling PPO.
+
+    J = mean_trajectories(mean_matching_actions(min(r*A, clip(r)*A))).
+    A is the original task-group advantage, with no trajectory-length divisor.
+    Numerical overflow rejects the candidate; it never silently clamps a ratio.
+    """
+
+    def __init__(self, scorer, *, epsilon=0.2, acceptance_margin=0.0):
+        if (
+            not 0 <= epsilon < 1
+            or not isfinite(acceptance_margin)
+            or acceptance_margin < 0
+        ):
+            raise ValueError("Invalid likelihood Gate configuration")
+        if scorer.mode is not ScoringMode.STRICT_TEACHER_FORCED:
+            raise TypeError("Sequence likelihood requires fixed-target teacher forcing")
+        self.scorer, self.epsilon, self.margin = scorer, epsilon, acceptance_margin
+
+    @staticmethod
+    def _average(rows):
+        groups = {}
+        for trajectory_id, value in rows:
+            groups.setdefault(trajectory_id, []).append(value)
+        return sum(sum(values) / len(values) for values in groups.values()) / len(
+            groups
+        )
+
+    def select(self, candidates, *, parent, examples):
+        if not candidates or not examples:
+            raise ValueError(
+                "Likelihood Gate requires candidates and historical actions"
+            )
+        if len({item.transition_id for item in examples}) != len(examples):
+            raise ValueError("Duplicate historical actions in Gate")
+        expected_ref = parent.reference if parent else None
+        advantages = {}
+        for example in examples:
+            if example.base_request.model_alias != self.scorer.model_alias:
+                raise ValueError("Scorer model must match the recorded executor model")
+            if (
+                not example.target_text
+                or not example.target_token_ids
+                or not isfinite(example.advantage)
+            ):
+                raise ValueError(
+                    "Missing original action span/token IDs or invalid advantage"
+                )
+            if (
+                example.trajectory_id in advantages
+                and advantages[example.trajectory_id] != example.advantage
+            ):
+                raise ValueError(
+                    "A trajectory must retain one original group advantage"
+                )
+            advantages[example.trajectory_id] = example.advantage
+            slots = [
+                m
+                for m in example.base_request.messages
+                if m.metadata.get("ppo_skill_slot")
+            ]
+            if (
+                len(slots) != 1
+                or slots[0].metadata.get("skill_reference") != expected_ref
+            ):
+                raise ValueError(
+                    "Behavior Skill slot does not match the recorded parent/NONE"
+                )
+            expected_text = "Active procedural skill:\n" + (
+                parent.format_for_prompt() if parent else "NONE"
+            )
+            if slots[0].text_content != expected_text:
+                raise ValueError(
+                    "Behavior Skill text differs from the actual parent version"
+                )
+        parent_j = sum(advantages.values()) / len(advantages)
+        records = []
+        old_traces = {}
+        for candidate in candidates:
+            record = {
+                "candidate_id": candidate.candidate_id,
+                "parent_skill_ref": expected_ref or "NONE",
+                "scorer_model": self.scorer.model_alias,
+                "epsilon": self.epsilon,
+                "acceptance_margin": self.margin,
+                "candidate_objective": None,
+                "accepted": False,
+                "trajectory_scores": [],
+                "metadata": {
+                    "scoring_mode": "sequence_raw_model_likelihood_surrogate",
+                    "formal_np_ppo": False,
+                    "weighting": "mean_trajectory_mean_matching_action",
+                    "old_objective": parent_j,
+                    "token_traces": [],
+                },
+            }
+            if candidate.skill.parent_skill_ref != expected_ref:
+                raise ValueError("Candidate lineage does not match the original parent")
+            if all(value == 0 for value in advantages.values()):
+                record.update(
+                    reason="no_relative_scoring_signal", candidate_objective=0.0
+                )
+                records.append(record)
+                continue
+            objectives = []
+            try:
+                for example in examples:
+                    old = old_traces.get(example.transition_id)
+                    if old is None:
+                        old = self.scorer.score(
+                            example.base_request, example.target_text
+                        )
+                        old_traces[example.transition_id] = old
+                    new = self.scorer.score(
+                        with_skill_prompt(example.base_request, candidate.skill),
+                        example.target_text,
+                    )
+                    if tuple(old.token_ids) != tuple(example.target_token_ids) or tuple(
+                        new.token_ids
+                    ) != tuple(example.target_token_ids):
+                        raise LikelihoodScoreRejected(
+                            "Target tokenization differs from recorded action tokens"
+                        )
+                    log_ratio = sum(new.token_logprobs) - sum(old.token_logprobs)
+                    if not isfinite(log_ratio):
+                        raise LikelihoodScoreRejected("Nonfinite sequence log ratio")
+                    try:
+                        ratio = exp(log_ratio)
+                    except OverflowError as exc:
+                        raise LikelihoodScoreRejected(
+                            "Sequence ratio overflow"
+                        ) from exc
+                    if not isfinite(ratio) or ratio == 0:
+                        raise LikelihoodScoreRejected(
+                            "Sequence ratio overflow or underflow"
+                        )
+                    clipped = max(1 - self.epsilon, min(1 + self.epsilon, ratio))
+                    objective = min(
+                        ratio * example.advantage, clipped * example.advantage
+                    )
+                    if not isfinite(objective):
+                        raise LikelihoodScoreRejected("Nonfinite clipped objective")
+                    objectives.append((example.trajectory_id, objective))
+                    record["trajectory_scores"].append(
+                        {
+                            "trajectory_id": example.trajectory_id,
+                            "transition_id": example.transition_id,
+                            "advantage": example.advantage,
+                            "old_sequence_logprob": sum(old.token_logprobs),
+                            "new_sequence_logprob": sum(new.token_logprobs),
+                            "old_mean_logprob": old.mean_logprob,
+                            "new_mean_logprob": new.mean_logprob,
+                            "importance_ratio": ratio,
+                            "log_ratio": log_ratio,
+                            "clipped_objective": objective,
+                            "target_token_count": len(example.target_token_ids),
+                        }
+                    )
+                    record["metadata"]["token_traces"].append(
+                        {
+                            "transition_id": example.transition_id,
+                            "target_text": example.target_text,
+                            "old": old.to_dict(),
+                            "new": new.to_dict(),
+                        }
+                    )
+                record["candidate_objective"] = self._average(objectives)
+                record["reason"] = "acceptance_margin_not_met"
+            except LikelihoodScoreRejected as exc:
+                record["reason"] = "invalid_likelihood_score"
+                record["metadata"]["error"] = str(exc)
+            records.append(record)
+        valid = [r for r in records if r["candidate_objective"] is not None]
+        best = (
+            max(valid, key=lambda r: (r["candidate_objective"], r["candidate_id"]))
+            if valid
+            else None
+        )
+        accepted_id = None
+        if best is not None and best["candidate_objective"] - parent_j > self.margin:
+            best["accepted"] = True
+            best["reason"] = "best_of_n_and_positive_gain"
+            accepted_id = best["candidate_id"]
+        for record in valid:
+            record["metadata"]["gain"] = record["candidate_objective"] - parent_j
+            if record is not best and record["reason"] != "no_relative_scoring_signal":
+                record["reason"] = "not_best_of_n"
+        return SequenceLikelihoodResult(
+            accepted_candidate_id=accepted_id, records=tuple(records)
+        )

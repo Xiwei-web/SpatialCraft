@@ -1,0 +1,1 @@
+Judge whether the active Skill termination criterion is satisfied using the task, original image, latest action, current observation, and relevant history. Return strict JSON terminate:boolean and a short reason_code. No ground truth is available. Ending a Skill does not end the whole task.

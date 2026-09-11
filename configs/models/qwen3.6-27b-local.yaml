@@ -8,6 +8,7 @@ capabilities:
     - text_input
     - image_input
     - tool_calling
+    - reasoning
     - fixed_target_scoring
 generation:
   max_output_tokens: 4096

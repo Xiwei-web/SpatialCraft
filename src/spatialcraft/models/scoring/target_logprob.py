@@ -23,7 +23,7 @@ class ScoringMode(str, Enum):
 
 
 def serialize_action(action: AgentAction) -> str:
-    """Canonicalize the exact historical decision used as the scoring target."""
+    """Serialize the parsed action for legacy scoring; v2 uses recorded token spans."""
 
     if action.action_type is ActionType.TOOL:
         payload = {
@@ -45,11 +45,13 @@ def serialize_action(action: AgentAction) -> str:
 def with_skill_prompt(request: ModelRequest, skill: SkillItem | None) -> ModelRequest:
     """Return the same context with exactly one marked skill slot changed."""
 
-    messages = tuple(
-        message
-        for message in request.messages
-        if not bool(message.metadata.get("ppo_skill_slot"))
-    )
+    slots = [
+        index
+        for index, message in enumerate(request.messages)
+        if bool(message.metadata.get("ppo_skill_slot"))
+    ]
+    if len(slots) > 1:
+        raise ValueError("A scoring request must contain exactly one Skill slot")
     content = skill.format_for_prompt() if skill is not None else "NONE"
     slot = ModelMessage.text(
         MessageRole.DEVELOPER,
@@ -59,15 +61,25 @@ def with_skill_prompt(request: ModelRequest, skill: SkillItem | None) -> ModelRe
             "skill_reference": skill.reference if skill else None,
         },
     )
-    insertion = next(
-        (
-            index
-            for index, message in enumerate(messages)
-            if message.role is MessageRole.USER
-        ),
-        len(messages),
-    )
-    messages = (*messages[:insertion], slot, *messages[insertion:])
+    if slots:
+        messages = list(request.messages)
+        original = messages[slots[0]]
+        messages[slots[0]] = replace(
+            original,
+            content=slot.content,
+            metadata={**original.metadata, **slot.metadata},
+        )
+        messages = tuple(messages)
+    else:
+        insertion = next(
+            (
+                i
+                for i, message in enumerate(request.messages)
+                if message.role is MessageRole.USER
+            ),
+            len(request.messages),
+        )
+        messages = (*request.messages[:insertion], slot, *request.messages[insertion:])
     return replace(
         request,
         messages=messages,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from spatialcraft.knowledge.skill import SkillLifecyclePolicy, TerminationDecision
-from spatialcraft.schemas import AgentAction, SkillItem, SpatialState
+from spatialcraft.schemas import AgentAction, SkillItem, SpatialState, TaskSample
 
 
 class TerminationController:
@@ -16,11 +16,13 @@ class TerminationController:
         state: SpatialState,
         action: AgentAction,
         next_state: SpatialState | None = None,
+        *,
+        task: TaskSample | None = None,
     ) -> TerminationDecision:
         if state.active_skill is None:
             return TerminationDecision(False)
         return self.policy.evaluate(
-            skill, state.active_skill, next_state or state, action
+            skill, state.active_skill, next_state or state, action, task=task
         )
 
 

@@ -154,8 +154,13 @@ class SemanticGradient(SchemaMixin):
         object.__setattr__(self, "metadata", dict(self.metadata))
         if self.reward is not None and not isfinite(float(self.reward)):
             raise ValueError("semantic-gradient reward must be finite")
-        if self.is_related and not any(
-            text.strip() for text in (self.initiation, self.policy, self.termination)
+        if (
+            self.is_related
+            and not self.metadata.get("no_change", False)
+            and not any(
+                text.strip()
+                for text in (self.initiation, self.policy, self.termination)
+            )
         ):
             raise ValueError("related semantic gradients require a component update")
 

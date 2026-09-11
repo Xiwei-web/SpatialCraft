@@ -38,6 +38,14 @@ def recovery_request(request, *, forced_final=False):
             "You may gather more evidence; you are not required to finish the task now."
         )
     kind = "forced_final" if forced_final else "recovery"
+    profile = request.metadata.get("recovery_profiles", {}).get(kind, {})
+    maximum_output = min(
+        request.settings.max_output_tokens or 4096,
+        profile.get(
+            "max_output_tokens",
+            FORCED_FINAL_TOKENS if forced_final else RECOVERY_TOKENS,
+        ),
+    )
     return replace(
         request,
         messages=(*request.messages, ModelMessage.text(MessageRole.USER, instruction)),
@@ -45,10 +53,7 @@ def recovery_request(request, *, forced_final=False):
         tool_choice=None if forced_final else request.tool_choice,
         settings=replace(
             request.settings,
-            max_output_tokens=min(
-                request.settings.max_output_tokens or 4096,
-                FORCED_FINAL_TOKENS if forced_final else RECOVERY_TOKENS,
-            ),
+            max_output_tokens=maximum_output,
             temperature=0.0,
             top_p=1.0,
         ),
@@ -59,6 +64,23 @@ def recovery_request(request, *, forced_final=False):
                 "enable_thinking": False,
             },
             "rollout_budget": {"policy": BUDGET_POLICY, "call_kind": kind},
+            **(
+                {
+                    "operation": "execution." + kind,
+                    "effective_reasoning_mode": "instruct",
+                    "operation_profile": {
+                        **profile,
+                        "role": "executor",
+                        "reasoning_mode": "instruct",
+                        "max_output_tokens": maximum_output,
+                        "temperature": 0.0,
+                        "top_p": 1.0,
+                        "repair_attempts": 0,
+                    },
+                }
+                if request.metadata.get("protocol_version") == "spatialcraft_v2"
+                else {}
+            ),
         },
     )
 
@@ -173,6 +195,59 @@ def parse_complete_action(parser, response, request, *, final_only=False):
         r"\s*Final Answer:\s*", action.final_answer or "", re.IGNORECASE
     ):
         raise ModelResponseError("Final answer is empty")
+    target = raw.get("action_target")
+    if isinstance(target, dict) and (target.get("text") or target.get("token_ids")):
+        # Capture and truncation salvage can choose different complete actions.
+        # Re-parse the recorded span independently using the same action rules;
+        # never score one action while executing another. A missing score span
+        # does not invalidate the already checked executable action.
+        target_matches = False
+        try:
+            target_text = target.get("text")
+            if not isinstance(target_text, str) or not target_text.strip():
+                raise ModelResponseError("Recorded action span has no text")
+            probe = replace(
+                response,
+                text=target_text,
+                tool_calls=(),
+                finish_reason="stop",
+                raw={"generated_text": target_text},
+            )
+            probe_request = replace(
+                request,
+                metadata={
+                    **request.metadata,
+                    "chat_template_kwargs": {
+                        **request.metadata.get("chat_template_kwargs", {}),
+                        "enable_thinking": False,
+                    },
+                },
+            )
+            target_action, _ = parse_complete_action(
+                parser, probe, probe_request, final_only=final_only
+            )
+            if target_action.action_type is action.action_type:
+                if action.action_type is ActionType.TOOL:
+                    target_matches = [
+                        (call.tool_name, call.arguments)
+                        for call in target_action.tool_calls
+                    ] == [
+                        (call.tool_name, call.arguments) for call in action.tool_calls
+                    ]
+                elif action.action_type is ActionType.FINAL:
+                    target_matches = target_action.final_answer == action.final_answer
+        except (ModelResponseError, ValueError, TypeError, KeyError):
+            target_matches = False
+        if not target_matches:
+            unavailable = {
+                key: value
+                for key, value in target.items()
+                if key not in {"text", "token_ids", "prefix", "prefix_token_ids"}
+            }
+            unavailable.update(status="unavailable", reason="selected_action_mismatch")
+            raw["action_target"] = unavailable
+            candidate = replace(candidate, raw=raw)
+            action = replace(action, raw_response=raw)
     return action, candidate
 
 
@@ -186,12 +261,17 @@ def decide(request, parser, generate, *, forced_final=False):
             "step_index": current.metadata.get("step_index"),
             "state_id": current.metadata.get("state_id"),
             "max_output_tokens": current.settings.max_output_tokens,
+            "parse_attempted": False,
         }
         events.append(event)
         try:
             response = generate(kind, current)
         except ModelResponseError as exc:
-            event.update(parse_error=str(exc), token_truncated=False)
+            event.update(
+                parse_error=str(exc),
+                parse_error_type="provider_response",
+                token_truncated=False,
+            )
             return None, str(exc)
         event.update(
             finish_reason=response.finish_reason,
@@ -201,6 +281,27 @@ def decide(request, parser, generate, *, forced_final=False):
             response_id=response.response_id,
         )
         return response, None
+
+    def parse(response, current, *, final_only=False):
+        event = events[-1]
+        event["parse_attempted"] = True
+        try:
+            action, parsed = parse_complete_action(
+                parser, response, current, final_only=final_only
+            )
+        except ModelResponseError as exc:
+            event.update(
+                parse_success=False,
+                parse_error=str(exc),
+                parse_error_type=(
+                    "argument_validation"
+                    if isinstance(exc.__cause__, ToolSchemaError)
+                    else "action_parse"
+                ),
+            )
+            raise
+        event.update(parse_success=True, parse_error=None, parse_error_type=None)
+        return action, parsed
 
     def result(current, response, action=None, failure=None, error=None):
         value = {
@@ -220,9 +321,7 @@ def decide(request, parser, generate, *, forced_final=False):
     response, error = call(kind, current)
     if response is not None:
         try:
-            action, parsed = parse_complete_action(
-                parser, response, current, final_only=forced_final
-            )
+            action, parsed = parse(response, current, final_only=forced_final)
             return result(current, parsed, action)
         except ModelResponseError as exc:
             error = str(exc)
@@ -234,7 +333,7 @@ def decide(request, parser, generate, *, forced_final=False):
     response, error = call("recovery", current)
     if response is not None:
         try:
-            action, parsed = parse_complete_action(parser, response, current)
+            action, parsed = parse(response, current)
             return result(current, parsed, action)
         except ModelResponseError as exc:
             error = str(exc)

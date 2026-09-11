@@ -29,3 +29,6 @@ coverage.xml
 
 # Editor and operating-system files
 .DS_Store
+
+# Generated local v2 validation logs and model/tool artifacts
+/artifacts/v2_validation/

@@ -9,12 +9,12 @@ from spatialcraft.schemas import ArtifactType, CoordinateFrame
 
 from ..base import ArtifactPayload, SpatialTool, ToolContext, ToolExecution, ToolSpec
 from ..schema_builder import array_schema, object_schema
+from ..spatial_arrays import array_bundle, backproject, camera_intrinsics, se3
 from .common import (
     LazyResource,
     SpatialToolPaths,
     add_python_path,
     normalized_preview,
-    numpy_bytes,
 )
 
 ReconstructionPredictor = Callable[[Sequence[str]], Mapping[str, Any]]
@@ -52,7 +52,9 @@ class DepthAnything3Adapter:
     def predict(self, image_uris: Sequence[str]) -> Mapping[str, Any]:
         if self.predictor is not None:
             return self.predictor(image_uris)
-        prediction = self._runtime.get().inference(list(image_uris))
+        prediction = self._runtime.get().inference(
+            list(image_uris), process_res_method="upper_bound_resize"
+        )
         return {
             name: getattr(prediction, name, None)
             for name in (
@@ -68,12 +70,16 @@ class DepthAnything3Adapter:
 class ReconstructionTool(SpatialTool):
     spec = ToolSpec(
         name="reconstruct",
-        description="Reconstruct consistent multi-view depth and camera geometry with Depth Anything 3.",
+        version="2.0.0",
+        description="Reconstruct depth and world point maps with DA3-BASE. Scale is unverified, not meters; equal-sized source views required. Pass the NPZ artifact as reconstruction_uri to mask, pose, or scale.",
         input_schema=object_schema(
             {
                 "image_uris": array_schema(
                     {"type": "string", "minLength": 1}, min_items=1, max_items=64
-                )
+                ),
+                "frame_indices": array_schema(
+                    {"type": "integer", "minimum": 0}, min_items=1, max_items=64
+                ),
             },
             required=("image_uris",),
         ),
@@ -88,54 +94,125 @@ class ReconstructionTool(SpatialTool):
         self, arguments: Mapping[str, Any], context: ToolContext
     ) -> ToolExecution:
         import numpy as np
+        from PIL import Image
 
         image_uris = tuple(str(item) for item in arguments["image_uris"])
+        source_shapes = []
+        for uri in image_uris:
+            with Image.open(uri) as image:
+                source_shapes.append((image.height, image.width))
+        # DA3 center-crops mixed-sized batches without returning that mapping.
+        # Reject the ambiguous path; an injected backend can supply the mapping.
+        if len(set(source_shapes)) != 1 and self.adapter.predictor is None:
+            raise ValueError(
+                "DA3 v2 requires equal-sized views to avoid undocumented batch center crops"
+            )
+        frame_indices = tuple(arguments.get("frame_indices", range(len(image_uris))))
+        if len(frame_indices) != len(image_uris) or len(set(frame_indices)) != len(
+            frame_indices
+        ):
+            raise ValueError("frame_indices must uniquely identify each source view")
         prediction = self.adapter.predict(image_uris)
         depth = np.asarray(prediction["depth"], dtype=np.float32)
         if depth.ndim == 2:
             depth = depth[None]
+        if depth.ndim != 3 or len(depth) != len(image_uris):
+            raise ValueError("backend depth must have shape (view_count,H,W)")
+        confidence_available = prediction.get("conf") is not None
         confidence = np.asarray(
-            prediction.get("conf")
+            prediction["conf"]
             if prediction.get("conf") is not None
             else np.ones_like(depth),
             dtype=np.float32,
         )
-        intrinsics = np.asarray(prediction.get("intrinsics"), dtype=np.float32)
-        extrinsics = np.asarray(prediction.get("extrinsics"), dtype=np.float32)
-        frames = []
-        for index in range(len(depth)):
-            transform = None
-            if extrinsics.size and index < len(extrinsics):
-                matrix = extrinsics[index]
-                if matrix.shape == (3, 4):
-                    matrix = np.vstack([matrix, [0, 0, 0, 1]])
-                if matrix.shape == (4, 4):
-                    camera_to_world = np.linalg.inv(matrix)
-                    transform = tuple(
-                        float(value) for value in camera_to_world.reshape(-1)
-                    )
-            frames.append(
-                CoordinateFrame(
-                    frame_id=f"reconstruction:camera:{index}",
-                    parent_frame_id="reconstruction:world" if transform else None,
-                    transform_to_parent=transform,
-                    unit="meter",
-                    convention="OpenCV camera pose in reconstruction world",
-                    metadata={"source_extrinsics": "world_to_camera"},
-                )
+        if confidence.shape != depth.shape:
+            raise ValueError("confidence and depth shapes must agree")
+        intrinsics = np.asarray(prediction.get("intrinsics"), dtype=float)
+        extrinsics = np.asarray(prediction.get("extrinsics"), dtype=float)
+        if intrinsics.shape != (len(depth), 3, 3) or extrinsics.shape not in (
+            (len(depth), 3, 4),
+            (len(depth), 4, 4),
+        ):
+            raise ValueError(
+                "backend must supply per-view intrinsics and world-to-camera extrinsics"
             )
-        world = CoordinateFrame(
-            frame_id="reconstruction:world",
-            unit="meter",
-            convention="Depth Anything 3 reconstruction world",
+        intrinsics = np.stack([camera_intrinsics(item) for item in intrinsics])
+        extrinsics = np.stack([se3(item) for item in extrinsics])
+        camera_to_worlds = np.linalg.inv(extrinsics)
+        height, width = depth.shape[1:]
+        transforms = prediction.get("source_to_processed")
+        if transforms is None:
+            if len(set(source_shapes)) != 1:
+                raise ValueError(
+                    "mixed source dimensions require explicit source_to_processed transforms"
+                )
+            transforms = [
+                np.array(
+                    [
+                        [width / w, 0, (width / w - 1) / 2],
+                        [0, height / h, (height / h - 1) / 2],
+                        [0, 0, 1],
+                    ]
+                )
+                for h, w in source_shapes
+            ]
+        transforms = np.asarray(transforms, dtype=float)
+        if transforms.shape != (len(depth), 3, 3) or not np.isfinite(transforms).all():
+            raise ValueError(
+                "source_to_processed must contain one finite 3x3 mapping per view"
+            )
+        # DA3-BASE is an any-view model, not the metric or nested checkpoint.
+        unit, scale_status = "reconstruction_unit", "unverified"
+        world_id = f"reconstruction:{context.invocation_id}:world"
+        valid = np.isfinite(depth) & (depth > 0) & np.isfinite(confidence)
+        points = np.stack(
+            [
+                backproject(d, k, c)
+                for d, k, c in zip(depth, intrinsics, camera_to_worlds, strict=True)
+            ]
         )
-        frames.append(world)
-        bundle = numpy_bytes(
-            depth,
-            compressed=True,
-            confidence=confidence,
+        points[~valid] = np.nan
+        frames = tuple(
+            CoordinateFrame(
+                frame_id=f"reconstruction:{context.invocation_id}:camera:{frame_indices[i]}",
+                parent_frame_id=world_id,
+                transform_to_parent=tuple(
+                    float(v) for v in camera_to_worlds[i].reshape(-1)
+                ),
+                unit=unit,
+                convention="right-handed OpenCV: x=right,y=down,z=forward",
+                metadata={
+                    "source_extrinsics": "world_to_camera",
+                    "transform_to_parent": "camera_to_world",
+                    "source_image_uri": image_uris[i],
+                },
+            )
+            for i in range(len(depth))
+        )
+        world = CoordinateFrame(
+            frame_id=world_id,
+            unit=unit,
+            convention="DA3 reconstruction gauge; not gravity aligned",
+            metadata={"scale_status": scale_status, "gravity_aligned": False},
+        )
+        bundle = array_bundle(
+            schema_version="spatial_arrays_v2",
+            array=depth,
+            depth=depth,
+            points=points.astype(np.float32),
+            valid=valid,
+            **({"confidence": confidence} if confidence_available else {}),
             intrinsics=intrinsics,
             extrinsics=extrinsics,
+            world_to_camera=extrinsics,
+            camera_to_world=camera_to_worlds,
+            source_image_uris=image_uris,
+            source_shapes=source_shapes,
+            source_to_processed=transforms,
+            frame_indices=frame_indices,
+            world_frame_id=world_id,
+            length_unit=unit,
+            scale_status=scale_status,
         )
         artifacts = [
             ArtifactPayload(
@@ -143,13 +220,32 @@ class ReconstructionTool(SpatialTool):
                 data=bundle,
                 suffix=".npz",
                 mime_type="application/x-npz",
-                shape=depth.shape,
-                dtype=str(depth.dtype),
-                frame_id=world.frame_id,
-                metadata={"content": "depth-confidence-intrinsics-extrinsics"},
+                shape=points.shape,
+                dtype="float32",
+                frame_id=world_id,
+                metadata={
+                    "content": "spatial_arrays_v2",
+                    "fields": [
+                        "points",
+                        "depth",
+                        "valid",
+                        "intrinsics",
+                        "camera_to_world",
+                        "source_to_processed",
+                    ],
+                    "downstream": [
+                        "mask.centroid_3d",
+                        "mask.masked_points",
+                        "pose.object_frame",
+                        "scale",
+                    ],
+                    "confidence_available": confidence_available,
+                    "length_unit": unit,
+                    "scale_status": scale_status,
+                },
             )
         ]
-        for index, item in enumerate(depth):
+        for i, item in enumerate(depth):
             artifacts.append(
                 ArtifactPayload(
                     artifact_type=ArtifactType.IMAGE,
@@ -158,25 +254,64 @@ class ReconstructionTool(SpatialTool):
                     mime_type="image/png",
                     shape=item.shape,
                     dtype="uint8",
-                    frame_id=frames[index].frame_id,
-                    metadata={"role": "depth_preview", "view_index": index},
+                    frame_id=frames[i].frame_id,
+                    metadata={
+                        "role": "depth_preview",
+                        "view_index": i,
+                        "frame_index": frame_indices[i],
+                        "source_image_uri": image_uris[i],
+                        "source_shape": list(source_shapes[i]),
+                        "source_to_processed": transforms[i].tolist(),
+                    },
                 )
             )
-        mean_confidence = float(np.clip(np.nanmean(confidence), 0, 1))
+        finite_confidence = (
+            confidence[np.isfinite(confidence)]
+            if confidence_available
+            else np.array([])
+        )
+        output = {
+            "view_count": len(depth),
+            "depth_shape": list(depth.shape),
+            "mean_confidence": float(finite_confidence.mean())
+            if finite_confidence.size
+            else None,
+            "confidence_available": confidence_available,
+            "confidence_semantics": "raw backend score; not calibrated probability"
+            if confidence_available
+            else "unavailable",
+            "camera_frame_ids": [frame.frame_id for frame in frames],
+            "world_frame_id": world_id,
+            "length_unit": unit,
+            "scale_status": scale_status,
+            "gravity_aligned": False,
+            "frame_indices": list(frame_indices),
+            "valid_point_count": int(valid.sum()),
+            "views": [
+                {
+                    "frame_index": frame_indices[i],
+                    "source_image_uri": uri,
+                    "source_shape": list(source_shapes[i]),
+                    "processed_shape": [height, width],
+                    "source_to_processed": transforms[i].tolist(),
+                    "intrinsics_pixels": intrinsics[i].tolist(),
+                    "camera_to_world": camera_to_worlds[i].tolist(),
+                }
+                for i, uri in enumerate(image_uris)
+            ],
+            "artifact_usage": "Pass NPZ URI as reconstruction_uri to mask, pose, or scale; masks default to source-image pixels.",
+        }
         return ToolExecution(
-            text=f"Depth Anything 3 reconstructed {len(depth)} view(s).",
-            structured_output={
-                "view_count": len(depth),
-                "depth_shape": list(depth.shape),
-                "mean_confidence": mean_confidence,
-                "camera_frame_ids": [frame.frame_id for frame in frames[:-1]],
-                "world_frame_id": world.frame_id,
-            },
+            text=f"DA3 reconstructed {len(depth)} view(s); scale unverified.",
+            structured_output=output,
             artifacts=tuple(artifacts),
-            coordinate_frames=tuple(frames),
-            confidence=mean_confidence,
-            unit="meter",
-            metadata={"backend_model": "Depth Anything 3"},
+            coordinate_frames=frames + (world,),
+            unit=unit,
+            metadata={
+                "backend_model": "Depth Anything 3",
+                "checkpoint": str(self.adapter.paths.da3_checkpoint),
+                "scale_status": scale_status,
+            },
         )
 
 

@@ -1,0 +1,1 @@
+Read the spatial question, answer choices and actual task images. Identify unique abstract technical requirements for Experience retrieval without solving the task or inventing irrelevant requirements. Return the requested aspects array within configured count bounds.

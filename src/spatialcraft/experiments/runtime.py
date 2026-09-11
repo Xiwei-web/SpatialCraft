@@ -116,6 +116,10 @@ class ExperimentRuntime:
         config = ModelConfig.from_dict(
             load_yaml(project / f"configs/models/{settings.backbone}.yaml")
         )
+        if config.local is None:
+            raise ValueError(
+                "This protocol runtime requires a local fixed-target executor; use the API baseline runner for API-only comparisons"
+            )
         self.model = replace(
             config,
             local=replace(
@@ -133,8 +137,10 @@ class ExperimentRuntime:
         )
         self.local = ConfiguredLocalProvider(self.model, settings.image_max_pixels)
         emb_config = ModelConfig.from_dict(
-            load_yaml(project / "configs/models/text-embedding-3-small.yaml")
+            load_yaml(project / f"configs/models/{settings.embedding_model}.yaml")
         )
+        if settings.is_v2:
+            emb_config = replace(emb_config, api=replace(emb_config.api, max_retries=0))
         self.embedding = OpenAIEmbeddingsProvider(
             emb_config, cache_dir=output / "embedding_cache"
         )
@@ -142,7 +148,14 @@ class ExperimentRuntime:
         self.binding = binding
         self.tools = create_real_tool_registry()
 
+    def _dataset_v2(self, name):
+        from .runtime_v2 import build_dataset
+
+        return build_dataset(self, name)
+
     def dataset(self, name: str) -> ProtocolPipeline:
+        if self.settings.is_v2:
+            return self._dataset_v2(name)
         journal = RunJournal(
             self.output / name,
             {

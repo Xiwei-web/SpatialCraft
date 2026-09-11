@@ -1,0 +1,1 @@
+Review only supplied candidate Skill pairs. Embedding similarity is candidate retrieval, not evidence of equivalence. Mark a duplicate only when initiation scope, procedure function, and termination criterion are redundant. Preserve complementary conditions. Return duplicates with keep_ref, archive_ref, reason; no chained/conflicting archives.

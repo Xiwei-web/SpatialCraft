@@ -77,7 +77,7 @@ def _usage(
     output_names: tuple[str, ...],
     total_names: tuple[str, ...] = ("total_tokens",),
 ) -> TokenUsage:
-    def first(names: tuple[str, ...], default: int | None = 0) -> int | None:
+    def first(names: tuple[str, ...], default: int | None = None) -> int | None:
         for name in names:
             item = _get(value, name)
             if item is not None:
@@ -90,16 +90,16 @@ def _usage(
     input_details = _get(value, "input_tokens_details") or _get(
         value, "prompt_tokens_details"
     )
+    reasoning = _get(details, "reasoning_tokens")
+    cached = _get(input_details, "cached_tokens")
+    if cached is None:
+        cached = _get(value, "cached_content_token_count")
     return TokenUsage(
-        input_tokens=int(first(input_names) or 0),
-        output_tokens=int(first(output_names) or 0),
-        total_tokens=first(total_names, None),
-        reasoning_tokens=int(_get(details, "reasoning_tokens", 0) or 0),
-        cached_input_tokens=int(
-            _get(input_details, "cached_tokens", 0)
-            or _get(value, "cached_content_token_count", 0)
-            or 0
-        ),
+        input_tokens=first(input_names),
+        output_tokens=first(output_names),
+        total_tokens=first(total_names),
+        reasoning_tokens=int(reasoning) if reasoning is not None else None,
+        cached_input_tokens=int(cached) if cached is not None else None,
     )
 
 

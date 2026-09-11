@@ -1,5 +1,7 @@
 # SpatialCraft 已确认协议与运行入口
 
+> 历史协议说明（2026-09-11）：本文记录 `legacy_v1` 的确认过程，文中“当前”指当时版本。现在 `experiments.run` 的默认配置已切换到 `spatialcraft_v2`；分阶段预算、LLM 经验维护、sequence Gate 与新入口见 [v2 实施记录](spatialcraft_v2.md)。保留本文用于理解旧日志，不能把这里的 small embedding、FIFO、统一4096或旧评分公式作为 v2 配置。
+
 当前工作区的trajectory预算策略以 `docs/action_recovery_v2.md` 为准：token截断使用action recovery，工具步数耗尽才forced-final。本文中旧输出超限收尾描述和已提交快照记录属于历史协议。
 
 更新：2026-09-07，当前协议为 **instruct / thinking=false / 单次输出 4096 / Skill generation 4096**，替代此前 1024/32768-token thinking 联调配置。用户希望知识压缩为可直接执行的 procedural Skills，减少在线重复推理。其余 6 条相关 trajectory / 最多 2 parents、50/8 steps、FIFO 调度等不变。Embedding 已连通，六个空间工具已通过独立真实调用；**尚未运行正式 benchmark**。

@@ -1,0 +1,1 @@
+Review every supplied active Skill against the current public task and observable state. Return the references of all applicable Skills; an empty list is valid. Do not use task answers or invent references. The caller ranks applicable Skills by embedding similarity.

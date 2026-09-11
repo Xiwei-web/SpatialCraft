@@ -1,0 +1,1 @@
+Visually adapt and filter the full retrieved Experience set for this task. Decide keep/skip exactly once for each supplied source_ref. Preserve the condition-action relationship, skip conflicting or redundant advice, and retain source identity. Do not use or infer a reference answer or produce the final answer. Return the requested items JSON.

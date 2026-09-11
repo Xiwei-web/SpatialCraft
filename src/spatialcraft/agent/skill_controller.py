@@ -50,12 +50,13 @@ class SkillController:
         action: AgentAction,
         next_state: SpatialState,
     ) -> SpatialState:
-        del task
         if not self.enabled or state.active_skill is None:
             return next_state
         active = state.active_skill
         skill = self.pool.get(f"{active.skill_id}@{active.version}")
-        decision = self.termination.evaluate(skill, state, action, next_state)
+        decision = self.termination.evaluate(
+            skill, state, action, next_state, task=task
+        )
         metadata = dict(next_state.metadata)
         if decision.terminate:
             retired = tuple(metadata.get("retired_skill_refs", ()))

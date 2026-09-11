@@ -1,15 +1,15 @@
-schema_version: "1.0"
+schema_version: '1.0'
 alias: gpt-5.4-mini
 provider: openai_responses
 model_id: gpt-5.4-mini
 enabled: true
 capabilities:
   supported:
-    - text_input
-    - image_input
-    - tool_calling
-    - structured_output
-    - reasoning
+  - text_input
+  - image_input
+  - tool_calling
+  - structured_output
+  - reasoning
   metadata:
     protocol: responses
 generation:
@@ -22,3 +22,9 @@ api:
   max_retries: 3
 metadata:
   purpose: cost-efficient verification and fallback execution
+  v2_reasoning_modes:
+    instruct:
+      reasoning_effort: none
+    thinking:
+      reasoning_effort: medium
+  v2_reasoning_mode_validation: configured_unverified_endpoint

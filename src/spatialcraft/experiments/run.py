@@ -17,6 +17,7 @@ from spatialcraft.tools.real.common import SpatialToolPaths
 
 from .journal import digest
 from .prepare import DATASET_ORDER
+from .prepare_v2 import DATASETS as V2_DATASETS
 from .protocol import public_task
 from .settings import ExperimentSettings
 
@@ -54,7 +55,6 @@ def load_api_key_file(path: Path) -> None:
         os.close(fd)
 
 
-
 def check_runtime_initialization(project: Path, settings, binding, names):
     """Exercise real runtime/journal setup without GPU loading or paid calls."""
     from .runtime import ExperimentRuntime
@@ -65,13 +65,17 @@ def check_runtime_initialization(project: Path, settings, binding, names):
         for name in names:
             pipeline = runtime.dataset(name)
             payload = {"runtime_initialization": "passed"}
-            pipeline.journal.execute("preflight", {"dataset": name}, lambda payload=payload: payload)
+            pipeline.journal.execute(
+                "preflight", {"dataset": name}, lambda payload=payload: payload
+            )
             restored = runtime.dataset(name).journal.read_committed("preflight")
             if restored != payload:
                 raise ValueError("Runtime journal commit/readback mismatch")
             checks[name] = "journal_create_commit_reopen_passed"
         if runtime.local._model is not None or runtime.embedding._client is not None:
-            raise RuntimeError("Offline initialization must not load models or API clients")
+            raise RuntimeError(
+                "Offline initialization must not load models or API clients"
+            )
     return checks
 
 
@@ -79,11 +83,20 @@ def preflight(project: Path, preparation: Path, config_path: Path, names=None):
     settings = ExperimentSettings.load(config_path)
     manifest = read_json(preparation / "manifest.json")
     datasets = {}
-    selected = tuple(DATASET_ORDER if names is None else names)
+    supported = V2_DATASETS if settings.is_v2 else DATASET_ORDER
+    selected = tuple(
+        (
+            manifest.get("dataset_order", DATASET_ORDER)
+            if settings.is_v2
+            else DATASET_ORDER
+        )
+        if names is None
+        else names
+    )
     if (
         not selected
         or len(set(selected)) != len(selected)
-        or any(name not in DATASET_ORDER for name in selected)
+        or any(name not in supported for name in selected)
     ):
         raise ValueError("Select unique supported benchmarks")
     for name in selected:
@@ -142,7 +155,7 @@ def preflight(project: Path, preparation: Path, config_path: Path, names=None):
         if not (model_path / shard).is_file():
             raise ValueError(f"Missing model shard: {shard}")
     embedding = ModelConfig.from_dict(
-        load_yaml(project / "configs/models/text-embedding-3-small.yaml")
+        load_yaml(project / f"configs/models/{settings.embedding_model}.yaml")
     )
     if embedding.model_id != settings.embedding_model:
         raise ValueError("Embedding model mismatch")
@@ -238,6 +251,21 @@ def preflight(project: Path, preparation: Path, config_path: Path, names=None):
             "output_budget_includes_thinking": True,
         },
     }
+    if settings.is_v2:
+        from .operation_profiles import resolved_configuration
+
+        binding["resolved_protocol"] = resolved_configuration(settings)
+        binding["evolution_protocol"].update(
+            batch_unit="distinct_semantically_related_trajectories_per_target_version",
+            reward_mix="prefer_3_low_3_high_then_fill_same_side",
+            round_boundary="after_all_task_rollouts",
+            maximum_discovery_per_round=settings.skill_options.get(
+                "max_discovery_per_round", 1
+            ),
+            thinking_score="generated_action_span_with_fixed_generated_prefix",
+            distribution="raw_model_likelihood_surrogate",
+            likelihood_aggregation="sequence_sum",
+        )
     initialization = check_runtime_initialization(project, settings, binding, selected)
     report = {
         "status": "offline_preflight_passed_not_api_or_full_tool_validation",
@@ -247,15 +275,17 @@ def preflight(project: Path, preparation: Path, config_path: Path, names=None):
         "counts": {
             name: {
                 "training": len(s["environment"]),
-                "training_rollouts": len(s["environment"]) * 4,
+                "training_rollouts": len(s["environment"]) * settings.rollouts_per_task,
                 "deployment": len(s["deployment"]),
             }
             for name, s in datasets.items()
         },
         "runtime_models": {
             "executor": settings.backbone,
-            "knowledge_builder": settings.backbone,
-            "ppo_scorer": settings.backbone,
+            "knowledge_builder": settings.roles.get(
+                "knowledge_builder", settings.backbone
+            ),
+            "ppo_scorer": settings.roles.get("scorer", settings.backbone),
             "embedding": settings.embedding_model,
         },
         "provisional_engineering_defaults": load_yaml(config_path).get(
@@ -277,7 +307,7 @@ def main():
     parser.add_argument(
         "--config",
         type=Path,
-        default=project / "configs/experiments/qwen35_9b_spatialcraft.yaml",
+        default=project / "configs/experiments/qwen35_9b_spatialcraft_v2.yaml",
     )
     parser.add_argument(
         "--preparation",
@@ -289,10 +319,12 @@ def main():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("/l/users/xiwei.liu/spatialcraftLog/runs/qwen35_9b_protocol_v2"),
+        default=Path(
+            "/l/users/xiwei.liu/spatialcraftLog/runs/spatialcraft_v2_qwen35_9b_full"
+        ),
     )
     parser.add_argument("--report", type=Path)
-    parser.add_argument("--datasets", nargs="+", choices=DATASET_ORDER)
+    parser.add_argument("--datasets", nargs="+", choices=V2_DATASETS)
     parser.add_argument("--api-key-file", type=Path)
     parser.add_argument(
         "--pilot-tasks",

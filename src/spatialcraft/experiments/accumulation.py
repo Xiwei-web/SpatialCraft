@@ -80,6 +80,24 @@ class ProtocolPipeline:
                 "Full SpatialCraft requires all knowledge/rollout callbacks"
             )
 
+    def _prepare(self, task, knowledge, phase):
+        owner = getattr(self.prepare_experiences, "__self__", None)
+        if hasattr(owner, "set_scope"):
+            owner.set_scope(
+                phase=phase, task_id=task.task_id, snapshot_id=knowledge.snapshot_id
+            )
+        value = self.prepare_experiences(task.without_reference_answer(), knowledge)
+        if isinstance(value, dict):
+            return value
+        return {"experiences": [r.to_dict() for r in value]}
+
+    def _update(self, knowledge, rows, prepared):
+        if self.settings.is_v2:
+            return self.update_experiences(
+                knowledge, rows, retrieval_audit=prepared.get("retrieval_audit", {})
+            )
+        return self.update_experiences(knowledge, rows)
+
     def _export(self, relative, value):
         from spatialcraft.storage.atomic_io import canonical_json_bytes
 
@@ -130,7 +148,13 @@ class ProtocolPipeline:
                 },
                 lambda: {
                     **KnowledgeState(
-                        ExperienceBank().freeze(), SeedCatalog.pool().freeze()
+                        ExperienceBank().freeze(),
+                        (
+                            SkillPool()
+                            if self.settings.is_v2
+                            and self.settings.ablations.get("no_skill")
+                            else SeedCatalog.pool()
+                        ).freeze(),
                     ).to_dict(),
                     "dataset": tasks[0].dataset,
                     "training_task_ids": [t.task_id for t in tasks],
@@ -147,14 +171,9 @@ class ProtocolPipeline:
                         "task": task.without_reference_answer().to_dict(),
                         "snapshot": before,
                     },
-                    lambda task=task, frozen=frozen: {
-                        "experiences": [
-                            r.to_dict()
-                            for r in self.prepare_experiences(
-                                task.without_reference_answer(), frozen
-                            )
-                        ]
-                    },
+                    lambda task=task, frozen=frozen: self._prepare(
+                        task, frozen, "accumulation_execution"
+                    ),
                 )
                 if frozen.snapshot_id != before:
                     raise RuntimeError("Retrieval modified frozen knowledge")
@@ -162,8 +181,12 @@ class ProtocolPipeline:
                     RetrievedExperienceRef.from_dict(r) for r in prepared["experiences"]
                 )
                 rows = []
-                for index in range(4):
-                    seed = self.settings.seed + task_index * 4 + index
+                for index in range(self.settings.rollouts_per_task):
+                    seed = (
+                        self.settings.seed
+                        + task_index * self.settings.rollouts_per_task
+                        + index
+                    )
                     base = frozen.copy()
                     value, _ = self.journal.execute(
                         prefix + f"/rollouts/{index:02d}/complete",
@@ -196,12 +219,12 @@ class ProtocolPipeline:
                 updated, _ = self.journal.execute(
                     prefix + "/experience_update",
                     {"snapshot": before, "trajectories": [t.to_dict() for t in rows]},
-                    lambda frozen=frozen, rows=tuple(rows): self.update_experiences(
-                        frozen.copy(), rows
+                    lambda frozen=frozen, rows=tuple(rows), prepared=prepared: (
+                        self._update(frozen.copy(), rows, prepared)
                     ),
                 )
                 bank = ExperienceBank.from_dict(updated["experience_bank"], frozen=True)
-                if len(bank.active()) > 100:
+                if len(bank.active()) > self.settings.experience_capacity:
                     raise ValueError("Experience capacity exceeded")
                 current = KnowledgeState(bank, frozen.skills)
                 self._export(f"experiences/task-{task_index:05d}.json", updated)
@@ -275,14 +298,7 @@ class ProtocolPipeline:
             prepared, _ = self.journal.execute(
                 prefix + "/retrieve_rewrite",
                 {"task": task.without_reference_answer().to_dict(), "snapshot": before},
-                lambda task=task: {
-                    "experiences": [
-                        r.to_dict()
-                        for r in self.prepare_experiences(
-                            task.without_reference_answer(), knowledge.copy()
-                        )
-                    ]
-                },
+                lambda task=task: self._prepare(task, knowledge.copy(), "deployment"),
             )
             refs = tuple(
                 RetrievedExperienceRef.from_dict(r) for r in prepared["experiences"]
@@ -326,5 +342,27 @@ class ProtocolPipeline:
             "knowledge_updated": False,
             "deployment_rollouts_per_task": 1,
         }
+        if self.settings.is_v2:
+            from spatialcraft.evaluation.protocol_metrics_v2 import protocol_metrics
+
+            result["protocol_metrics_path"] = "results/protocol_metrics.json"
+            self._export(
+                result["protocol_metrics_path"],
+                protocol_metrics(
+                    rows,
+                    knowledge,
+                    token_counter=getattr(self, "metric_token_counter", None),
+                    tokenizer_id=getattr(self, "metric_tokenizer_id", None),
+                ),
+            )
         self._export("results/deployment.json", result)
+        if self.settings.is_v2:
+            from spatialcraft.storage.atomic_io import atomic_write_json
+
+            from .usage import cost_report
+
+            atomic_write_json(
+                self.journal.root / "results/usage.json",
+                cost_report(self.journal.root, len(rows)),
+            )
         return result

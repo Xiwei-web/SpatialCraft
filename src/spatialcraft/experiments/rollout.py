@@ -239,7 +239,7 @@ class JournaledRollout:
                     "action": action_wire,
                     "sampled_thinking_prefix": scoring_prefix,
                 },
-                lambda step=step, state=state, next_state=next_state, action=action, results=tuple(results), used=used, request_wire=request_wire, outcome=outcome, scoring_prefix=scoring_prefix, decision=decision: (
+                lambda step=step, state=state, next_state=next_state, action=action, results=tuple(results), used=used, request_wire=request_wire, outcome=outcome, scoring_prefix=scoring_prefix, decision=decision, response=response: (
                     Transition(
                         step_index=step,
                         state_before=state,
@@ -253,6 +253,9 @@ class JournaledRollout:
                         metadata={
                             "model_request": request_wire,
                             "sampled_thinking_prefix": scoring_prefix,
+                            "action_target": (response.raw or {}).get("action_target")
+                            if isinstance(response.raw, dict)
+                            else None,
                             "call_kind": decision["events"][-1]["kind"],
                             "budget_policy": BUDGET_POLICY,
                             "consumes_environment_step": action.action_type

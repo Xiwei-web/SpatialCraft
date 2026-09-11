@@ -149,7 +149,13 @@ class SAM3Tool(SpatialTool):
         masks = np.asarray(prediction["masks"], dtype=bool)
         if masks.ndim == 2:
             masks = masks[None]
+        if masks.ndim != 3 or masks.shape[1:] != (height, width):
+            raise ValueError(
+                "SAM3 masks must match source image dimensions; no implicit resize is allowed"
+            )
         scores = np.asarray(prediction.get("scores", np.ones(len(masks))), dtype=float)
+        if scores.shape != (len(masks),) or not np.isfinite(scores).all():
+            raise ValueError("SAM3 scores must align with masks and be finite")
         frame = image_pixel_frame(Path(image_uri).stem, width, height)
         artifacts = tuple(
             ArtifactPayload(
@@ -160,12 +166,22 @@ class SAM3Tool(SpatialTool):
                 shape=(height, width),
                 dtype="uint8",
                 frame_id=frame.frame_id,
-                metadata={"mask_index": index, "score": float(scores[index])},
+                metadata={
+                    "mask_index": index,
+                    "score": float(scores[index]),
+                    "source_image_uri": image_uri,
+                    "source_shape": [height, width],
+                    "mask_space": "source",
+                    "downstream": ["mask", "pose"],
+                },
             )
             for index, mask in enumerate(masks)
         )
         output = {
             "mask_count": len(masks),
+            "source_image_uri": image_uri,
+            "source_shape": [height, width],
+            "mask_space": "source",
             "scores": scores.tolist(),
             "boxes": np.asarray(prediction.get("boxes", ())).tolist(),
             "frame_id": frame.frame_id,

@@ -1,0 +1,230 @@
+schema_version: '2.0'
+settings:
+  seed: 42
+  accumulation_passes: 1
+  rollouts_per_task: 4
+  evolution_batch_trajectories: 6
+  max_parent_skills_per_round: 2
+  skill_generation_max_tokens: 16384
+  experience_top_k_per_subtask: 3
+  experience_capacity: 100
+  skill_capacity: 20
+  skill_candidates: 3
+  embedding_model: text-embedding-3-large
+  backbone: qwen3.6-27b-local
+  max_steps: 50
+  max_output_tokens: 4096
+  training_temperature: 0.7
+  training_top_p: 0.9
+  deployment_temperature: 0.0
+  auxiliary_temperature: 0.0
+  ppo_epsilon: 0.2
+  ppo_positive_margin: 0.0
+  skill_max_lifetime: 8
+  image_max_pixels: 1048576
+  enable_thinking: false
+  ppo_thinking_mode: action_only
+  protocol_version: spatialcraft_v2
+  roles:
+    executor: qwen3.6-27b-local
+    knowledge_builder: qwen3.6-27b-local
+    scorer: qwen3.6-27b-local
+    embedding: text-embedding-3-large
+  operations:
+    execution.accumulation:
+      role: executor
+      reasoning_mode: instruct
+      max_output_tokens: 4096
+      temperature: 0.7
+      top_p: 0.9
+      repair_attempts: 0
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    execution.deployment:
+      role: executor
+      reasoning_mode: instruct
+      max_output_tokens: 4096
+      temperature: 0.0
+      top_p: 1
+      repair_attempts: 0
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    execution.fallback:
+      role: executor
+      reasoning_mode: instruct
+      max_output_tokens: 4096
+      repair_attempts: 0
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    execution.recovery:
+      role: executor
+      reasoning_mode: instruct
+      max_output_tokens: 1024
+      temperature: 0
+      top_p: 1
+      repair_attempts: 0
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    execution.forced_final:
+      role: executor
+      reasoning_mode: instruct
+      max_output_tokens: 512
+      temperature: 0
+      top_p: 1
+      repair_attempts: 0
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    experience.summary:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 8192
+      temperature: 0.6
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    experience.critique:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 16384
+      temperature: 0.6
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    experience.merge:
+      role: knowledge_builder
+      reasoning_mode: instruct
+      max_output_tokens: 1024
+      temperature: 0
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 1024
+      max_input_tokens: null
+    experience.manage:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 8192
+      temperature: 0.6
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    retrieval.decomposition:
+      role: knowledge_builder
+      reasoning_mode: instruct
+      max_output_tokens: 1024
+      temperature: 0
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 1024
+      max_input_tokens: null
+    retrieval.rewrite:
+      role: knowledge_builder
+      reasoning_mode: instruct
+      max_output_tokens: 2048
+      temperature: 0
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 2048
+      max_input_tokens: null
+    skill.semantic_gradient:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 8192
+      temperature: 0.6
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    skill.gradient_aggregation:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 16384
+      temperature: 0.6
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    skill.candidate_generation:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 16384
+      temperature: 0.7
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    skill.termination:
+      role: knowledge_builder
+      reasoning_mode: instruct
+      max_output_tokens: 256
+      temperature: 0
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 256
+      max_input_tokens: null
+    skill.selection_judge:
+      role: knowledge_builder
+      reasoning_mode: instruct
+      max_output_tokens: 256
+      temperature: 0
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 256
+      max_input_tokens: null
+    skill.deduplication:
+      role: knowledge_builder
+      reasoning_mode: instruct
+      max_output_tokens: 1024
+      temperature: 0
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 1024
+      max_input_tokens: null
+    baseline.reflection:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 8192
+      temperature: 0.6
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+    baseline.workflow:
+      role: knowledge_builder
+      reasoning_mode: thinking
+      max_output_tokens: 8192
+      temperature: 0.6
+      top_p: 1.0
+      repair_attempts: 1
+      repair_max_tokens: 4096
+      max_input_tokens: null
+  experience_options:
+    max_words: 64
+    critique_max_ops: 4
+    merge_cosine_threshold: 0.7
+    decomposition_min_aspects: 1
+    decomposition_max_aspects: 3
+    retrieval_minimum_score: null
+  skill_options:
+    stored_skill_max_tokens: 1024
+    minimum_quality_trajectories: 3
+    deduplication_mode: llm
+    deduplication_cosine_threshold: 0.9
+    preferred_low_reward: 3
+    preferred_high_reward: 3
+    max_discovery_per_round: 1
+  ablations: {}
+  experiment_name: full
+method_decisions:
+  ratio: sequence
+  distribution: raw_model_likelihood_surrogate
+  target: recorded_generated_action_token_span
+  baseline: original_task_group_mean
+  objective_weighting: equal_trajectory_then_equal_attributed_action
+  acceptance: best_candidate_J_minus_parent_J_strictly_positive
+  skill_selection: full_pool_llm_applicability_then_embedding_top1
+  neutral_skill_pruning: false
+  retrieval_threshold: null
+  rewrite: one_batch_per_task

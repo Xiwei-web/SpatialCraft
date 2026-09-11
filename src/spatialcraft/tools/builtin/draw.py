@@ -36,6 +36,9 @@ def render_annotations(
     *,
     boxes: list[Mapping[str, Any]] | None = None,
     points: list[Mapping[str, Any]] | None = None,
+    lines: list[Mapping[str, Any]] | None = None,
+    thickness: int | None = None,
+    point_radius: int | None = None,
 ) -> tuple[bytes, int, int]:
     try:
         from PIL import Image, ImageDraw
@@ -48,13 +51,19 @@ def render_annotations(
         image = source.convert("RGB")
     width, height = image.size
     draw = ImageDraw.Draw(image)
+    stroke = thickness or max(1, min(width, height) // 200)
+    for item in lines or []:
+        x1, y1, x2, y2 = (float(v) for v in item["line"])
+        draw.line(
+            [(x1, y1), (x2, y2)], fill=str(item.get("color", "yellow")), width=stroke
+        )
     for item in boxes or []:
         bbox = validate_bbox(item["bbox"], width=width, height=height)
         color = str(item.get("color", "red"))
-        draw.rectangle(bbox, outline=color, width=max(1, min(width, height) // 200))
+        draw.rectangle(bbox, outline=color, width=stroke)
         if item.get("label"):
             draw.text((bbox[0] + 2, bbox[1] + 2), str(item["label"]), fill=color)
-    radius = max(2, min(width, height) // 100)
+    radius = point_radius or max(2, min(width, height) // 100)
     for item in points or []:
         x, y = (float(value) for value in item["point"])
         color = str(item.get("color", "lime"))
@@ -69,12 +78,26 @@ def render_annotations(
 class DrawTool(SpatialTool):
     spec = ToolSpec(
         name="draw",
-        description="Draw labeled boxes and points on an image and return the annotation.",
+        description="Draw labeled boxes, points and line segments on an image; source image is unchanged.",
+        version="2.0.0",
         input_schema=object_schema(
             {
                 "image_uri": {"type": "string", "minLength": 1},
                 "boxes": array_schema(_BOX_SCHEMA),
                 "points": array_schema(_POINT_SCHEMA),
+                "lines": array_schema(
+                    object_schema(
+                        {
+                            "line": array_schema(
+                                {"type": "number"}, min_items=4, max_items=4
+                            ),
+                            "color": {"type": "string"},
+                        },
+                        required=("line",),
+                    )
+                ),
+                "thickness": {"type": "integer", "minimum": 1, "maximum": 100},
+                "point_radius": {"type": "integer", "minimum": 1, "maximum": 100},
             },
             required=("image_uri",),
         ),
@@ -87,6 +110,9 @@ class DrawTool(SpatialTool):
             arguments["image_uri"],
             boxes=arguments.get("boxes"),
             points=arguments.get("points"),
+            lines=arguments.get("lines"),
+            thickness=arguments.get("thickness"),
+            point_radius=arguments.get("point_radius"),
         )
         frame = image_pixel_frame(Path(arguments["image_uri"]).stem, width, height)
         return ToolExecution(
@@ -99,6 +125,7 @@ class DrawTool(SpatialTool):
                 "height": height,
                 "box_count": len(arguments.get("boxes", [])),
                 "point_count": len(arguments.get("points", [])),
+                "line_count": len(arguments.get("lines", [])),
             },
             artifacts=(
                 ArtifactPayload(

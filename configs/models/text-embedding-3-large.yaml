@@ -1,0 +1,16 @@
+schema_version: "1.0"
+alias: text-embedding-3-large
+provider: openai_embeddings
+model_id: text-embedding-3-large
+enabled: true
+capabilities:
+  supported: [text_input, embeddings]
+api:
+  api_key_env: OPENAI_API_KEY
+  base_url: https://api.openai.com/v1
+  timeout_seconds: 120
+  max_retries: 3
+metadata:
+  dimensions: 3072
+  normalize: true
+  purpose: shared_experience_and_skill_retrieval

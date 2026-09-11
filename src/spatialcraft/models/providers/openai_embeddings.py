@@ -44,15 +44,14 @@ class OpenAIEmbeddingsProvider(ModelProvider):
             raise ModelConfigurationError("Expected openai_embeddings configuration")
         config.capabilities.require(Capability.EMBEDDINGS)
         self.config, self._client = config, client
-        self.dimensions = int(config.metadata.get("dimensions", 1536))
-        if not 1 <= self.dimensions <= 1536:
-            raise ModelConfigurationError(
-                "text-embedding-3-small dimensions must be 1..1536"
-            )
-        if config.model_id != "text-embedding-3-small":
-            raise ModelConfigurationError(
-                "This experiment requires text-embedding-3-small"
-            )
+        limits = {"text-embedding-3-small": 1536, "text-embedding-3-large": 3072}
+        if config.model_id not in limits:
+            raise ModelConfigurationError("Unsupported embedding model")
+        self.dimensions = int(
+            config.metadata.get("dimensions", limits[config.model_id])
+        )
+        if not 1 <= self.dimensions <= limits[config.model_id]:
+            raise ModelConfigurationError("Embedding dimensions exceed model capacity")
         assert config.api is not None
         self.identity = f"{config.model_id}:{self.dimensions}:l2:v1:{config.api.resolved_base_url() or 'https://api.openai.com/v1'}"
         self.cache_dir = Path(cache_dir) if cache_dir is not None else None

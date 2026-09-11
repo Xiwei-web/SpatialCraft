@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from math import isfinite
 from pathlib import Path
 
@@ -36,7 +36,26 @@ class ExperimentSettings:
     enable_thinking: bool = False
     ppo_thinking_mode: str = "action_only"
 
+    protocol_version: str = "legacy_v1"
+    roles: dict = field(default_factory=dict)
+    operations: dict = field(default_factory=dict)
+    experience_options: dict = field(default_factory=dict)
+    skill_options: dict = field(default_factory=dict)
+    ablations: dict = field(default_factory=dict)
+    experiment_name: str = "full"
+
+    @property
+    def is_v2(self):
+        return self.protocol_version == "spatialcraft_v2"
+
     def __post_init__(self):
+        if self.is_v2:
+            from .operation_profiles import validate_v2_settings
+
+            validate_v2_settings(self)
+            return
+        if self.protocol_version != "legacy_v1":
+            raise ValueError("Unknown protocol version")
         if type(self.enable_thinking) is not bool:
             raise TypeError("enable_thinking must be boolean")
         expected_mode = (
@@ -131,8 +150,28 @@ class ExperimentSettings:
             raise ValueError("Invalid deployment/PPO setting")
 
     def to_dict(self):
-        return asdict(self)
+        values = asdict(self)
+        if not self.is_v2:
+            for key in (
+                "protocol_version",
+                "roles",
+                "operations",
+                "experience_options",
+                "skill_options",
+                "ablations",
+                "experiment_name",
+            ):
+                values.pop(key)
+        return values
 
     @classmethod
     def load(cls, path: str | Path):
-        return cls(**load_yaml(path)["settings"])
+        document = load_yaml(path)
+        if not isinstance(document, dict) or not isinstance(
+            document.get("settings"), dict
+        ):
+            raise ValueError("Experiment file requires a settings object")  # noqa: TRY004 - configuration validation
+        unknown = set(document["settings"]) - cls.__dataclass_fields__.keys()
+        if unknown:
+            raise ValueError(f"Unknown experiment settings: {sorted(unknown)}")
+        return cls(**document["settings"])

@@ -303,6 +303,25 @@ class TransformersLocalProvider(ModelProvider):
         model, processor = self._load()
         inputs = self._prepare(processor, model, request)
         settings = request.settings
+        if request.metadata.get("protocol_version") == "spatialcraft_v2":
+            profile = request.metadata.get("operation_profile", {})
+            input_count = int(inputs["input_ids"].shape[-1])
+            maximum_input = profile.get("max_input_tokens")
+            model_config = getattr(model.config, "text_config", model.config)
+            window = self.config.capabilities.context_window or getattr(
+                model_config, "max_position_embeddings", None
+            )
+            if maximum_input is not None and input_count > maximum_input:
+                raise ModelRequestError(
+                    "Operation input exceeds its explicit context budget"
+                )
+            if (
+                window is not None
+                and input_count + (settings.max_output_tokens or 512) > window
+            ):
+                raise ModelRequestError(
+                    "Operation input and output budgets exceed the model context window"
+                )
         generation: dict[str, Any] = {
             "max_new_tokens": settings.max_output_tokens or 512,
             "do_sample": bool(settings.temperature and settings.temperature > 0),
@@ -388,15 +407,33 @@ class TransformersLocalProvider(ModelProvider):
         )
         if thinking and not truncated:
             if "</think>" not in text:
-                raise ModelResponseError(
-                    "Thinking output ended without closing </think>; no action can be executed"
-                )
-            before, marker, after = text.partition("</think>")
-            # Qwen's generation prompt already supplies '<think>\n'. Keep the
-            # exact generated continuation, including boundary whitespace.
-            leading = after[: len(after) - len(after.lstrip())]
-            raw["sampled_thinking_prefix"] = before + marker + leading
-        response = (ModelResponse if truncated else parse_generated_text)(
+                if request.metadata.get("knowledge_output"):
+                    # A malformed knowledge answer still consumed generation
+                    # tokens. Preserve it for accounting and bounded JSON repair.
+                    raw["thinking_prefix_incomplete"] = True
+                else:
+                    raise ModelResponseError(
+                        "Thinking output ended without closing </think>; no action can be executed"
+                    )
+            else:
+                before, marker, after = text.partition("</think>")
+                # Qwen's generation prompt already supplies '<think>\n'. Keep
+                # the exact generated continuation and boundary whitespace.
+                leading = after[: len(after) - len(after.lstrip())]
+                raw["sampled_thinking_prefix"] = before + marker + leading
+        if request.metadata.get(
+            "protocol_version"
+        ) == "spatialcraft_v2" and not request.metadata.get("knowledge_output"):
+            from spatialcraft.agent.action_target import capture_action_target
+
+            raw["action_target"] = capture_action_target(
+                text, raw["generated_token_ids"], tokenizer
+            )
+        response = (
+            ModelResponse
+            if truncated or request.metadata.get("knowledge_output")
+            else parse_generated_text
+        )(
             text=text,
             provider=self.provider_name,
             model=self.config.model_id,
@@ -430,26 +467,91 @@ class TransformersLocalProvider(ModelProvider):
             raise ModelRequestError(
                 "Thinking action scoring requires a completed fixed sampled prefix"
             )
-        if prefix is not None:
-            if not isinstance(prefix, str) or not thinking:
-                raise ModelRequestError(
-                    "Fixed thinking prefix requires explicit thinking mode"
-                )
-            rendered += prefix
-        prompt = self._encode(processor, rendered, images, videos)
-        combined = self._encode(processor, rendered + target_text, images, videos)
-        prompt_ids = prompt["input_ids"]
-        input_ids = combined["input_ids"]
-        prompt_count = int(prompt_ids.shape[-1])
-        if input_ids.shape[-1] <= prompt_count:
-            raise ValueError("target_text must produce at least one continuation token")
-        if not self._torch().equal(input_ids[:, :prompt_count], prompt_ids):
-            raise ModelRequestError(
-                "tokenizer changed the prompt boundary; prepend a stable separator "
-                "to target_text for strict scoring"
-            )
-        target_ids = input_ids[:, prompt_count:]
+        fixed_ids = request.metadata.get("fixed_target_token_ids")
+        fixed_prefix_ids = request.metadata.get("fixed_scoring_prefix_token_ids", [])
         torch = self._torch()
+        if fixed_ids is not None:
+            tokenizer = getattr(processor, "tokenizer", processor)
+            if (
+                not isinstance(fixed_ids, (list, tuple))
+                or not fixed_ids
+                or any(type(i) is not int or i < 0 for i in fixed_ids)
+            ):
+                raise ModelRequestError("Invalid recorded action token IDs")
+            if not isinstance(fixed_prefix_ids, (list, tuple)) or any(
+                type(i) is not int or i < 0 for i in fixed_prefix_ids
+            ):
+                raise ModelRequestError("Invalid recorded prefix token IDs")
+            decode = lambda ids: tokenizer.decode(
+                ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )
+            if decode(fixed_ids) != target_text or decode(fixed_prefix_ids) != (
+                prefix or ""
+            ):
+                raise ModelRequestError(
+                    "Recorded target/prefix text does not match exact token IDs"
+                )
+            combined = dict(self._encode(processor, rendered, images, videos))
+            base = combined["input_ids"]
+            continuation = torch.tensor(
+                [list(fixed_prefix_ids) + list(fixed_ids)],
+                dtype=base.dtype,
+                device=base.device,
+            )
+            prompt_count = int(base.shape[-1]) + len(fixed_prefix_ids)
+            combined["input_ids"] = torch.cat((base, continuation), dim=-1)
+            # Qwen3.5 mRoPE indexes mm_token_type_ids with attention_mask.
+            # Every appended prefix/action token is text (type 0); preserve all
+            # original vision markers and grids so the model computes its own
+            # multimodal positions for the complete teacher-forced sequence.
+            for field, fill in (
+                ("attention_mask", 1),
+                ("token_type_ids", 0),
+                ("mm_token_type_ids", 0),
+            ):
+                if field not in combined:
+                    continue
+                values = combined[field]
+                if tuple(values.shape) != tuple(base.shape):
+                    raise ModelRequestError(
+                        f"Processor {field} is not aligned with input_ids"
+                    )
+                extension = torch.full(
+                    tuple(continuation.shape),
+                    fill,
+                    dtype=values.dtype,
+                    device=values.device,
+                )
+                combined[field] = torch.cat((values, extension), dim=-1)
+            if "position_ids" in combined:
+                raise ModelRequestError(
+                    "Explicit processor position_ids need a model-specific fixed continuation adapter"
+                )
+            input_ids = combined["input_ids"]
+            target_ids = input_ids[:, prompt_count:]
+        else:
+            if request.metadata.get("protocol_version") == "spatialcraft_v2":
+                raise ModelRequestError("v2 scoring requires recorded action token IDs")
+            if prefix is not None:
+                if not isinstance(prefix, str) or not thinking:
+                    raise ModelRequestError(
+                        "Fixed thinking prefix requires explicit thinking mode"
+                    )
+                rendered += prefix
+            prompt = self._encode(processor, rendered, images, videos)
+            combined = self._encode(processor, rendered + target_text, images, videos)
+            prompt_ids = prompt["input_ids"]
+            input_ids = combined["input_ids"]
+            prompt_count = int(prompt_ids.shape[-1])
+            if input_ids.shape[-1] <= prompt_count:
+                raise ValueError(
+                    "target_text must produce at least one continuation token"
+                )
+            if not torch.equal(input_ids[:, :prompt_count], prompt_ids):
+                raise ModelRequestError(
+                    "tokenizer changed the prompt boundary; require a stable continuation boundary"
+                )
+            target_ids = input_ids[:, prompt_count:]
         batch = self._move_inputs(combined, model)
         target_count = int(target_ids.shape[-1])
         options = {"use_cache": False}
@@ -470,9 +572,7 @@ class TransformersLocalProvider(ModelProvider):
             else output.logits[:, prompt_count - 1 : -1, :]
         )
         log_probs = torch.log_softmax(logits.float(), dim=-1)
-        selected = log_probs.gather(
-            -1, target_ids.to(log_probs.device).unsqueeze(-1)
-        )
+        selected = log_probs.gather(-1, target_ids.to(log_probs.device).unsqueeze(-1))
         values = selected.squeeze(0).squeeze(-1).detach().cpu().tolist()
         ids = target_ids.squeeze(0).tolist()
         return SequenceScore(

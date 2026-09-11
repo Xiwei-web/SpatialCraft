@@ -1,6 +1,16 @@
 # SpatialCraft 快速结构说明
 
+> 主方法版本（2026-09-11）：默认入口已升级为 `spatialcraft_v2`，结构增量见本文第5节，配置、验收与限制见 [v2实施记录](docs/spatialcraft_v2.md)。以下带日期的旧运行状态是历史记录；RAG等独立baseline各自保留其运行协议。
+
 本文用于让新对话中的 Agent 快速了解 SpatialCraft 的代码、空间工具和数据集位置。
+
+GPT-5.4 RAG（2026-09-11）：已提交 **229347**，与两个mini任务独立并行；gpt-5.4 / medium / 单次16384 tokens，环境每题4次、部署每题1次，Top-3原始样例检索。RoboSpatial、ERQA、Omni3D、SAT测试175/200/250/300题，执行源码及数据输入与229287一致，GPT-5.4独立从空库建库；真实GPT-5.4建库→embedding检索→多图部署API验收通过。运行 `spatialcraftLog/runs/gpt54_rag_medium16384_20260911_v1`；日志 `slurm-229347.out`，最终 `<dataset>/results/deployment.json` 及 `results/accuracy.md`。提交时PENDING，状态以Slurm为准。详见 [GPT-5.4 RAG运行说明](RAG/runs/20260911_gpt54_medium16384.md)。
+
+ViewSpatial RAG（2026-09-11）：已提交 **229312**，与229287独立并行；gpt-5.4-mini / medium / 单次16384 tokens，环境2856题×4次、测试2856题×1次，Top-3原始样例检索。复用229287的同一冻结代码，ViewSpatial输入与此前mini直接回答baseline逐字节一致；完整划分/媒体离线检查通过，无跨集合内容完全重复。独立运行 `spatialcraftLog/runs/gpt54mini_rag_viewspatial_medium16384_20260911_v1`；实时日志 `slurm-229312.out`，进度 `viewspatial/progress.json`，最终accuracy `viewspatial/results/deployment.json`。提交时PENDING，状态以Slurm为准。详见 [ViewSpatial RAG运行说明](RAG/runs/20260911_viewspatial_gpt54mini_medium16384.md)。
+
+RAG正式运行（2026-09-11）：已提交 **229287**，gpt-5.4-mini / reasoning_effort=medium / 单次16384 tokens，环境每题4次、部署每题1次，Top-3原始样例检索；不传temperature/top_p/seed。RoboSpatial、ERQA、Omni3D、SAT部署175/200/250/300题，与先前baseline输入逐字节一致。已处理RoboSpatial和Omni3D各一组跨集合内容重复：保持原划分，检索时排除当前题的完全重复历史样例并记日志。34项回归、冻结预检查及独立真实API建库→检索→多图部署验收通过。运行目录 `spatialcraftLog/runs/gpt54mini_rag_medium16384_20260911_v2`；日志 `slurm-229287.out/.err`，最终 `<dataset>/results/deployment.json` 和 `results/accuracy.md`。提交时PENDING，实时状态以Slurm为准。详见 [RAG运行说明](RAG/runs/20260911_gpt54mini_medium16384.md)。
+
+RAG 示例检索 baseline（2026-09-11）：新增独立 `RAG/`，支持 gpt-5.4-mini 和 gpt-5.4。环境阶段保存公开任务与模型原始输出，部署按任务 embedding cosine Top-3 检索历史样例；不生成反思总结、lessons、Experience 或 Skill。默认单次视觉问答、reasoning=none、4096 tokens，环境每题4次、部署每题1次；两个模型各自建库。**该段为最初编写阶段记录；随后提交的medium/16384任务见上方运行说明。** 详见第6节及 `RAG/README.md`。
 
 Tool-only ReAct baseline（2026-09-10）：已提交 **227082**，gpt-5.4-mini / reasoning=none / temperature=0 / 每次4096 tokens。复用纯模型baseline同一925题（RoboSpatial175、ERQA200、Omni3D250、SAT300），每题一条多步trajectory、单pass，使用项目11个真实空间工具，无Experience/Skill/embedding/PPO。50次工具交互上限、单step最多一次1024-token恢复、步数耗尽512-token最终作答。单张A100 40GB，四数据集依次执行。运行 `spatialcraftLog/runs/gpt54mini_tool_react_baseline_20260910_v1`；最终 `{dataset}/results/deployment.json`、汇总 `results/summary.json`、实时 `{dataset}/progress.json`。202项完整回归、最终63项针对性回归、真实API工具往返及六个重型GPU工具验收通过。详见 `docs/gpt54mini_tool_react_baseline_20260910.md`；实时状态以Slurm为准。
 
@@ -50,6 +60,7 @@ Omni3D journal修复（2026-09-09）：**220630** 的GPU和27B推理验收通过
 
 其他重要目录：
 
+- `RAG/`：独立 GPT 示例检索 baseline；保存原始 task/output，经冻结任务向量索引检索，不调用 Experience/Skill 学习分支。入口为 `run_gpt54mini.sh`、`run_gpt54.sh`，详见第6节。
 - `configs/models/`：五个 backbone 配置，以及 `text-embedding-3-small.yaml`；Experience/Skill 共用 OpenAI embedding，不回退到 Qwen embedding。
 - `configs/experiments/qwen35_9b_spatialcraft.yaml`：1 pass、每题 4 rollouts；每 parent 6 条相关 trajectory 后演化、每 task 屏障最多 2 parents；trajectory/Skill 上限50/8 steps、单次/候选输出4096 tokens、thinking=false（instruct）；PPO直接评分action tokens；top3、候选3、容量100/20。
 - 补充确认：训练 top_p=0.9、部署/辅助构建 temperature=0、PPO epsilon=0.2 与严格正收益 margin=0、旧版本剩余轨迹仅存档；当前仅 `image_max_pixels=1048576` 仍待确认。
@@ -151,3 +162,44 @@ Qwen3.5-9B 的 RoboSpatial → ERQA → Omni3D 实验准备说明见 `docs/qwen3
 本轮已接通知识 builder、多模态 NP-PPO、工具反馈和严格协议运行器；新 thinking 协议验证见 `validation/protocol-v2-20260907/`，旧 nonthinking 验证保留在 `validation/protocol-20260907/`。
 待用户设置 key 后再做真实 embedding/空间工具组合的小规模验收；未宣称全量实验通过。正式执行将写入 `runs/qwen35_9b_protocol_v2/{robospatial,erqa,omni3d}/`，共享 embedding 缓存位于该 run 根目录的 `embedding_cache/`；各 benchmark 的 `skills/round-*.json` 和 `checkpoints/pending_evolution.json` 保存演化队列及消费审计。
 恢复使用同一个 `experiments.run --execute --output ...` 命令；变更代码/配置/权重/依赖需新版本目录。协议、暂定参数和完整日志索引见 `docs/confirmed_protocol.md`。
+
+
+## 2026-09-11：SpatialCraft v2 正式入口
+
+当前主方法默认配置为 `configs/experiments/qwen35_9b_spatialcraft_v2.yaml`，27B 对应 `qwen36_27b_spatialcraft_v2.yaml`。旧配置保留 legacy 学习协议，历史复现实验仍需使用当次冻结源码。
+
+- `experiments/runtime_v2.py`、`learning_v2.py`：正式运行时与双层记忆集成；`operation_profiles.py`、`knowledge_generator.py`：按操作预算/模式、真实模板、模型角色与一次结构修复。
+- `knowledge/experience/learning_v2.py`：视觉 Summary/Critique、embedding+LLM Merge、LLM Manage、检索重写与原子回滚。
+- `knowledge/skill/learning_v2.py`、`RelatedEvolutionQueue`、`SequenceLikelihoodGate`：语义相关性、3/3六轨迹、聚合、REFINE/NONE发现、固定历史动作门控。
+- `agent/action_target.py`、`models/providers/transformers_local.py`：真实动作token跨度和多模态固定目标评分。
+- `experiments/usage.py`、`evaluation/cost_report_v2.py`：实际调用、未知usage、缓存与阶段成本。
+- `experiments/prepare_v2.py`：五数据集准备；`run_memory_baseline.py`、`baseline_memory.py`：有独立执行分支的基线适配。
+- `tools/spatial_arrays.py`、`tools/real/*`：可消费的三维点图、坐标/尺度/有效性契约及工具链接口。
+
+新增 `evaluation/protocol_metrics_v2.py` 从真实轨迹审计生成恢复、解析、截断、重复调用率及知识存储/注入统计；`cost_report_v2.py` 提供按任务成本与离线摊销。
+
+方法选择、验证范围、运行方式与限制以 `docs/spatialcraft_v2.md`、`docs/tool_api_matrix.md`、`docs/model_capabilities_v2.md`、`docs/baseline_matrix.md` 为准。GPU诊断与CPU检查输出位于 `artifacts/v2_validation/`，不属于正式benchmark结果。
+
+
+### 跨模型冻结部署补充（2026-09-11）
+
+- `experiments/run_frozen_transfer.py`：从已提交的主方法最终 E/K 快照直接运行另一本地 Qwen9B/27B 的 v2 部署；独立目标 journal 绑定来源与目标身份，不重跑积累、不改写来源。默认 CPU/offline preflight；API-only 目标不支持。
+- `tests/test_frozen_transfer_v2.py`：来源哈希、split/task 隔离、目标 tokenizer 限制、正式 Runtime callback 和恢复冻结测试。入口与限制见 [v2 跨模型说明](docs/spatialcraft_v2.md#跨模型冻结部署入口)。
+
+## 6. RAG baseline：`/home/xiwei.liu/spatialcraft/RAG`
+
+这是用户定义的 example-retrieval baseline：环境阶段收集轻量原始 rollout 记录，部署阶段只读检索并提供历史任务文本和模型原始输出；不产生 reflected summaries 或 lessons。与 `experiments/baseline_memory.py` 中“仅保存验证成功工具轨迹”的 `rag_demonstrations` 变体不同。
+
+- `run_rag.py`：共用入口，支持 `--model gpt-5.4-mini/gpt-5.4`、`--stage environment/deployment/all`、`--datasets`；默认仅离线准备，显式 `--execute` 才调用 API。
+- `run_gpt54mini.sh`、`run_gpt54.sh`：模型便捷入口，需提供独立 `--output`；不会自动提交 Slurm。
+- `data.py`：复用已有 deployment 输入，准备去标签的环境任务，校验图像、来源及跨集合任务重复。
+- `core.py`：原始 task/output 记录、任务 embedding 文本、cosine Top-k 和样例注入，无 LLM 反思或改写。
+- `runner.py`：环境收集、索引冻结、部署检索、确定性评分和逐调用断点日志。
+- `tests/test_rag.py`：已编写的离线测试，覆盖标签隔离、错误答案保留、检索、冻结和恢复；本次未运行。
+- `README.md`：完整方法、参数、划分、命令及结果路径说明。
+
+默认两阶段 reasoning=none、4096 tokens；环境单pass每题4次、temperature=0.7；部署每题1次、temperature=0。默认 text-embedding-3-large，对 question、choices、answer_type 编码，Top-3 检索同数据集的不同历史任务。每个历史任务以最早完成且非空的原始输出作为代表，不按正确性筛选；全部 rollout 均存档。当前题传入全部原图，历史样例只提供文本。环境 rollout 数、温度、Top-k 和 embedding 型号可配置，变更须用新输出目录。
+
+默认 RoboSpatial 175/175、ERQA 200/200、Omni3D 251/250、SAT 300/300（environment/deployment）；前三者复用既有划分，SAT 环境集采用现有 v2 validation→test 抽样规则，部署仍为 circular test 300题。可选 ViewSpatial 2856/2856，复用已划分半集。
+
+运行后，原始记录在 `<output>/<dataset>/memory/records.jsonl`，冻结索引与标记为 `memory/index.json`、`memory/snapshot.json`；进度为 `<dataset>/progress.json`，逐调用日志在 `<dataset>/stages/`。accuracy 在 `<dataset>/results/deployment.json`，逐题结果在 `results/predictions.jsonl`，跨数据集总表在 `<output>/results/accuracy.md`。正式RAG运行已提交229287，目录和检查记录见上方运行说明；尚无完整accuracy结果。
