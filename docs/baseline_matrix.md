@@ -78,3 +78,5 @@ Skill-Pro adapter 还为已提交的训练轨迹写入 `stages/tasks/<task>/roll
 `rag_demonstrations` 保存专用语义表示，排除 raw response、token IDs、评分输入及运行时间戳；原始 journal 仍保留这些复现字段。正式 Runtime 用实际执行器 tokenizer 限制完整注入文本（默认 1024 tokens）。无 tokenizer 的通用测试适配明确回退为 256 words，不把 word 当 token。超长示例仍会拒绝，`results/memory_construction.json` 与 journal 的 construction 阶段报告成功轨迹、候选示例、拒绝/保存/当前有效示例数及部署命中；这不保证所有成功轨迹都适合当前预算。
 
 Skill-Pro 的 `--skill-capacity` 在创建 Runtime 前写入唯一有效 settings，并检查已绑定 evolver 容量一致。六种子协议拒绝小于 6 的容量；容量 10 的回归实际把超容 Skill 池修剪到 10。详情见 [复审说明](review_acdcaec_fixes.md)。
+
+三次复审进一步从模型可见的语义视图移除 ToolExecutor 的 `invocation_id` 和 `resolved_artifact_uris`，原始执行审计继续保留。真实 GeometryTool → ToolExecutor → ArtifactStore 的跨目录变换/投影测试验证这条工具链生成相同 demonstration，且 artifact 依赖、frame、单位和尺度来源仍可消费。见 [T04 处理记录](review_7822316_fixes.md)。

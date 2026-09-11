@@ -47,7 +47,7 @@ backend verification must be reported separately. The registered tool names rema
   It is not the center of a complete solid object. Object bounds have the same
   visibility limitation.
 
-## Geometry frame and value units (2.1.0)
+## Geometry frame and value units (2.1.1)
 
 Geometry reports `source_frame_id`, `result_frame_id`,
 `source_coordinate_length_unit`, `coordinate_length_unit`, and `value_unit`.
@@ -79,6 +79,22 @@ transforms, projection and backprojection. Supplying `length_unit="meter"` alone
 leaves scale `unverified`; it never establishes metric accuracy. `estimated_metric`
 remains an estimate. Existing artifacts without scale metadata remain unverified,
 and explicit arguments cannot silently override stored scale or coordinate data.
+
+Geometry 2.1.1 applies the same operand-frame checks to 2D distance/bbox and
+3D operations. Explicit `first_frame_id`/`second_frame_id` conflicts are rejected
+as `argument_validation`; a single declared operand frame establishes the source
+when no source/frame ID was provided. Numeric comparison requires a shared frame.
+
+Forward and inverse projection share a finite, invertible affine pixel-calibration
+contract: positive focal diagonal, an invertible 2x2 pixel basis (off-diagonal
+entries are supported), and homogeneous last row `[0,0,1]`. Calibration, affine
+pixel mappings and SE(3) poses snap accepted last rows to the exact homogeneous
+form on a copy (absolute tolerance 1e-8 for calibration/mappings, 1e-5 for SE(3),
+with rtol=0); computations and returned calibration use
+that same canonical matrix. Singular/nonfinite inverses produce `ToolSchemaError`
+so the agent can correct its arguments. Infrastructure exceptions remain failures.
+See the [T01–T04 audit response](review_7822316_fixes.md) for CPU runtime recovery
+coverage; this does not establish real perception accuracy.
 
 ## Implemented API and draft correspondence
 

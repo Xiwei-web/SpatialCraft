@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "recorded_at_utc": "2026-09-11T15:49:42.140957+00:00",
+  "audit_commit": "78223169447ffa16fac14133aded1ffae2c42e93",
+  "base_commit": "78223169447ffa16fac14133aded1ffae2c42e93",
+  "branch": "thrid",
+  "source_state": "uncommitted_worktree_changes_on_base_commit",
+  "pytest": {
+    "tests": 433,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "passed": 433,
+    "new_tests_since_audit": 20,
+    "warnings": 15,
+    "pytest_reported_seconds": 77.01,
+    "command": [
+      "/home/xiwei.liu/miniconda3/envs/spatialcraft/bin/python",
+      "-m",
+      "pytest",
+      "-q",
+      "--junitxml=/home/xiwei.liu/spatialcraft/artifacts/v2_validation/review_7822316_cpu/pytest.xml"
+    ],
+    "environment": {
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "PYTHONPATH": "src"
+    },
+    "exit_code": 0,
+    "elapsed_seconds": 80.25731449597515,
+    "tested_files_sha256": {
+      "src/spatialcraft/experiments/runtime_v2.py": "29ab9ec6b704e2a0c60c61893b8c9ff0407bea22915495281448f159939f176c",
+      "src/spatialcraft/experiments/usage.py": "e56233f78eb2c5e88974677342057b463697addbda9cdef99f09f1e14b485375",
+      "src/spatialcraft/knowledge/evidence.py": "bdfc9e69b6c5fad9d76802a4b8eea4a0a61085d962578c5174002f9f987f1dbc",
+      "src/spatialcraft/tools/builtin/geometry.py": "d27d11c679b1654120a56c187457549b7a84d4db6309cfe1f0bd027facd0a783",
+      "src/spatialcraft/tools/spatial_arrays.py": "0651782d2744da0bf166df9bad086e01bd2702b888229f38d1d26ba973b2cbb2",
+      "tests/test_geometry_input_recovery_t01_t02.py": "706b340eef0b487d2b2ba33bd0dbb96615ea68a8df3442db3b9522d737845fc9",
+      "tests/test_real_tool_demonstration_evidence.py": "08dcd62bb37c0851f41d2036c71982bc62e6d824807b3aa0dd2d312bb726a72b",
+      "tests/test_selection_embedding_scope_v2.py": "b9fbd84e846d96857fb8a751b2e1f05d20123eb03746392cf2d721b7a5cd20a1"
+    },
+    "sources_unchanged_during_test": true
+  },
+  "static_checks": {
+    "python_file_count": 8,
+    "ruff_check": "passed",
+    "ruff_format_check": "passed",
+    "git_diff_check": "passed"
+  },
+  "coverage": {
+    "T01_T02": "15 new analytic/real-ToolExecutor/scripted-production-Runtime cases; four rollouts, argument correction, resume without duplicate tool execution, MemoryError remains fatal",
+    "T03": "3 new cases; production accumulation/deployment selection accounting, resume request identity, embedding infrastructure failure",
+    "T04": "2 new real-GeometryTool/ToolExecutor/ArtifactStore cases; identical cross-directory demonstrations and intact original audits"
+  },
+  "real_gpu_or_paid_api_run": false,
+  "warning_sources": [
+    "torch NVML initialization",
+    "matplotlib/pyparsing deprecations"
+  ],
+  "limitations": "CPU contract/control-flow tests do not establish real model correction quality, retrieval accuracy, benchmark outcomes or runtime cost improvements.",
+  "artifacts_sha256": {
+    "artifacts/v2_validation/review_7822316_cpu/pytest.txt": "3c4a4da662107d3bcc3590fc15b054fb67d44452d275acbc1f2568fec3464e8e",
+    "artifacts/v2_validation/review_7822316_cpu/pytest.xml": "2e1e117b35a9ef035bc0bb7f074447574bf3128084d848ac6e9f40fefb527c66",
+    "artifacts/v2_validation/review_7822316_cpu/execution.json": "f002ba3177ee2b513ee78603b91727a47c2485c0141664a639d18891dad32677",
+    "artifacts/v2_validation/review_7822316_cpu/static_checks.json": "285399abb2c28f768836c214911dae92fcc70afef8b0cfee985f6ac2a2e3d0ec"
+  },
+  "portability": "Summary is reviewable under docs/validation; complete raw artifacts remain local and git-ignored."
+}

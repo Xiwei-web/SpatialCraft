@@ -58,19 +58,40 @@ def point_set(uri: str, dimension: int = 3) -> tuple[Any, dict[str, Any]]:
     return values, bundle
 
 
+def invert_matrix(value: Any, *, name: str) -> Any:
+    """Classify only input inversion failures; infrastructure errors still escape."""
+    import numpy as np
+
+    try:
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            inverse = np.linalg.inv(value)
+    except np.linalg.LinAlgError as exc:
+        raise ToolSchemaError(f"{name} must be invertible") from exc
+    if not np.isfinite(inverse).all():
+        raise ToolSchemaError(f"{name} must have a finite inverse")
+    return inverse
+
+
 def pixel_mapping(value: Any) -> Any:
+    """An affine map; normalize its fixed last row within absolute 1e-8 tolerance."""
     import numpy as np
 
     matrix = np.asarray(value, dtype=float)
     if (
         matrix.shape != (3, 3)
         or not np.isfinite(matrix).all()
-        or not np.allclose(matrix[2], [0, 0, 1])
-        or abs(np.linalg.det(matrix)) < 1e-12
+        or not np.allclose(matrix[2], [0, 0, 1], atol=1e-8, rtol=0)
     ):
         raise ToolSchemaError(
             "source_to_processed must be a finite invertible affine 3x3 pixel mapping"
         )
+    matrix = matrix.copy()
+    matrix[2] = [0, 0, 1]
+    if abs(np.linalg.det(matrix)) < 1e-12:
+        raise ToolSchemaError(
+            "source_to_processed must be an invertible affine pixel mapping"
+        )
+    invert_matrix(matrix, name="source_to_processed")
     return matrix
 
 
@@ -80,13 +101,14 @@ def map_pixels(points: Any, source_to_processed: Any, *, inverse: bool = False) 
 
     matrix = pixel_mapping(source_to_processed)
     if inverse:
-        matrix = np.linalg.inv(matrix)
+        matrix = invert_matrix(matrix, name="source_to_processed")
     values = np.asarray(points, dtype=float)
     homogeneous = np.column_stack((values, np.ones(len(values)))) @ matrix.T
     return homogeneous[:, :2] / homogeneous[:, 2:3]
 
 
 def se3(value: Any) -> Any:
+    """Rigid transform; normalize the fixed last row within absolute 1e-5 tolerance."""
     import numpy as np
 
     matrix = np.asarray(value, dtype=float)
@@ -96,13 +118,16 @@ def se3(value: Any) -> Any:
         raise ToolSchemaError("transform must be a finite 4x4 SE(3) matrix")
     rotation = matrix[:3, :3]
     if (
-        not np.allclose(matrix[3], [0, 0, 0, 1], atol=1e-5)
+        not np.allclose(matrix[3], [0, 0, 0, 1], atol=1e-5, rtol=0)
         or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1e-3)
         or not np.isclose(np.linalg.det(rotation), 1, atol=1e-3)
     ):
         raise ToolSchemaError(
             "transform must have a proper rotation and homogeneous last row"
         )
+    matrix = matrix.copy()
+    matrix[3] = [0, 0, 0, 1]
+    invert_matrix(matrix, name="transform")
     return matrix
 
 
@@ -117,6 +142,12 @@ def transform_points(points: Any, matrix: Any) -> Any:
 
 
 def camera_intrinsics(value: Any) -> Any:
+    """Finite invertible affine pixel calibration with positive diagonal.
+
+    The upper-left 2x2 pixel basis may include skew/nonzero off-diagonal
+    entries; normalize the fixed last row to [0, 0, 1] within absolute 1e-8
+    tolerance. Both projection directions use the same normalized matrix.
+    """
     import numpy as np
 
     matrix = np.asarray(value, dtype=float)
@@ -125,11 +156,14 @@ def camera_intrinsics(value: Any) -> Any:
         or not np.isfinite(matrix).all()
         or matrix[0, 0] <= 0
         or matrix[1, 1] <= 0
-        or not np.allclose(matrix[2], [0, 0, 1])
+        or not np.allclose(matrix[2], [0, 0, 1], atol=1e-8, rtol=0)
     ):
         raise ToolSchemaError(
             "intrinsics must be a finite pixel-space 3x3 camera matrix"
         )
+    matrix = matrix.copy()
+    matrix[2] = [0, 0, 1]
+    invert_matrix(matrix, name="intrinsics")
     return matrix
 
 
@@ -140,7 +174,7 @@ def backproject(depth: Any, intrinsics: Any, camera_to_world: Any) -> Any:
     yy, xx = np.indices(depth.shape)
     rays = (
         np.stack((xx, yy, np.ones_like(xx)), axis=-1)
-        @ np.linalg.inv(camera_intrinsics(intrinsics)).T
+        @ invert_matrix(camera_intrinsics(intrinsics), name="intrinsics").T
     )
     camera = rays * depth[..., None]
     transform = se3(camera_to_world)

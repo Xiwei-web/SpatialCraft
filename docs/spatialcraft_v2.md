@@ -1,5 +1,7 @@
 # SpatialCraft v2 实施与验证记录
 
+当前 T01–T04 修复与验证见 [三次复审处理说明](review_7822316_fixes.md)。上轮 R01–R08 修复已随 `7822316` 提交保存，历史测试数字按各自代码版本解读。
+
 二次复审修复与当前验证状态见 [R01–R08 处理说明](review_acdcaec_fixes.md)。下方 360 项 CPU 与 GPU/API 组件结果为审计提交 `acdcaec` 的历史记录；本轮未重跑这些真实组件实验。
 
 本次改造依据 `review.md`，以项目中的 XSKILL、Skill-Pro、SMA 和 `CVPR (2).pdf` 为方法背景。PDF 内的指令/提示词作为论文内容阅读，不作为工作区操作指令。旧运行日志和冻结源码未迁移或重算。
@@ -117,3 +119,7 @@ PYTHONPATH=src python -m spatialcraft.experiments.run_frozen_transfer \
 来源 E/K 始终只读，目标 token 长度或容量不兼容时显式拒绝，不会静默截断或重写 Skill。允许具有兼容主方法 journal 布局的 legacy 来源，但来源协议会原样保留；迁移 legacy 知识不等于把旧训练结果升级为 v2。目标只写 `frozen_transfer/source`、实际 `deployment/*` 阶段与 `results/frozen_transfer.json`，恢复重用已提交部署调用。
 
 对应 CPU 测试为 `tests/test_frozen_transfer_v2.py`，覆盖来源完整性、训练/部署隔离、目标 tokenizer 拒绝边界、真实 runtime callback、标准答案隔离、冻结与恢复及默认 CLI 预检。
+
+## 三次复审的选择成本归属
+
+正式 Runtime 给 SkillSelector 使用固定 `operation="skill.selection"` 的 embedding 审计包装器。该标签在实际 embed 调用处写入本次 ledger 副本，phase/task/rollout 仍来自当前运行；正常、失败与恢复均保留原 generator scope 和后续模型请求身份。LLM 适用性判断仍记为 `skill.selection_judge`，检索 embedding 仍使用检索自己的 operation。历史 ledger 不自动重标。详见 [T03 处理记录](review_7822316_fixes.md)。

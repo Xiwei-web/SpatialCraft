@@ -153,6 +153,9 @@ def build_dataset(runtime, name):
         settings, models, providers, runtime.project, journal
     )
     embedder = ScopedEmbedder(runtime.embedder, journal, lambda: generator.scope)
+    selection_embedder = ScopedEmbedder(
+        runtime.embedder, journal, lambda: generator.scope, operation="skill.selection"
+    )
     layout = StorageLayout(journal.root / "tool_store")
     ledger = UsageLedger(journal.root)
 
@@ -283,7 +286,7 @@ def build_dataset(runtime, name):
             else SkillController(
                 knowledge.skills,
                 selector=SkillSelector(
-                    embedder=embedder, applicability_judge=builders.applicable
+                    embedder=selection_embedder, applicability_judge=builders.applicable
                 ),
                 termination=TerminationController(
                     SkillLifecyclePolicy(

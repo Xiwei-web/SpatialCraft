@@ -53,6 +53,11 @@ _AUDIT_KEYS = {
     "evidence_id",
     "request_id",
     "response_id",
+    # ToolExecutor records these for replay/provenance, not semantic evidence.
+    # In particular the URI map contains machine-specific paths as values and
+    # run-specific logical artifact URIs as keys; omit the entire audit field.
+    "invocation_id",
+    "resolved_artifact_uris",
     "created_at",
     "updated_at",
     "started_at",

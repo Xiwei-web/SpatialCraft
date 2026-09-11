@@ -15,6 +15,7 @@ from ..spatial_arrays import (
     array_bundle,
     bundle_scalar,
     camera_intrinsics,
+    invert_matrix,
     map_pixels,
     pixel_mapping,
     point_set,
@@ -41,11 +42,37 @@ def _bbox_relation(first: tuple[float, ...], second: tuple[float, ...]) -> list[
     return relations
 
 
+def _input_frame(arguments: Mapping[str, Any], fallback: str) -> str:
+    return str(
+        next(
+            (
+                arguments[key]
+                for key in (
+                    "source_frame_id",
+                    "frame_id",
+                    "first_frame_id",
+                    "second_frame_id",
+                )
+                if key in arguments
+            ),
+            fallback,
+        )
+    )
+
+
+def _check_operand_frames(arguments: Mapping[str, Any], source_frame: str) -> None:
+    for key in ("first_frame_id", "second_frame_id"):
+        if key in arguments and str(arguments[key]) != source_frame:
+            raise ToolSchemaError(
+                "operands must share a coordinate frame; transform explicitly first"
+            )
+
+
 class GeometryTool(SpatialTool):
     spec = ToolSpec(
         name="geometry",
-        version="2.1.0",
-        description="Compute 2D/3D geometry. Keep coordinate_length_unit separate from value_unit; frame_id aliases result_frame_id. Explicit length_unit never proves metric scale: pass scale_status or preserve artifact provenance. points_uri accepts 3D point sets or valid projected pixels. Camera operations use camera_to_world and intrinsics; pixel_space/intrinsics_space default processed, and source_to_processed is required if they differ. Projection emits a distinct pixel frame. For backprojection, source_frame_id labels pixels; target_frame_id (legacy frame_id fallback) labels world output; camera-z depths use length_unit.",
+        version="2.1.1",
+        description="Compute 2D/3D geometry. Keep coordinate_length_unit separate from value_unit; frame_id aliases result_frame_id. Explicit length_unit never proves metric scale: pass scale_status or preserve artifact provenance. points_uri accepts 3D point sets or valid projected pixels. Camera operations require invertible finite pixel intrinsics with positive diagonal and last row [0,0,1]; camera_to_world is SE(3). Near-canonical homogeneous rows are normalized (absolute tolerance 1e-8 for intrinsics/pixel maps, 1e-5 for SE3); pixel_space/intrinsics_space default processed, and source_to_processed is required if they differ. Projection emits a distinct pixel frame. For backprojection, source_frame_id labels pixels; target_frame_id (legacy frame_id fallback) labels world output; camera-z depths use length_unit.",
         input_schema=object_schema(
             {
                 "operation": enum_schema(
@@ -157,12 +184,7 @@ class GeometryTool(SpatialTool):
             source_frame = bound_scalar("source_frame_id", "frame_id", "")
             result_frame = world_frame
         else:
-            default_frame = arguments.get(
-                "frame_id",
-                arguments.get(
-                    "first_frame_id", arguments.get("second_frame_id", "geometry:world")
-                ),
-            )
+            default_frame = _input_frame(arguments, "geometry:world")
             source_frame = bound_scalar("source_frame_id", "frame_id", default_frame)
             if "frame_id" in arguments and str(arguments["frame_id"]) != source_frame:
                 raise ToolSchemaError(
@@ -170,11 +192,7 @@ class GeometryTool(SpatialTool):
                 )
             world_frame = source_frame
             result_frame = str(arguments.get("target_frame_id", source_frame))
-        for key in ("first_frame_id", "second_frame_id"):
-            if key in arguments and str(arguments[key]) != source_frame:
-                raise ToolSchemaError(
-                    "operands must share a coordinate frame; transform explicitly first"
-                )
+        _check_operand_frames(arguments, source_frame)
 
         camera_metadata = {}
         if camera_operation:
@@ -316,7 +334,9 @@ class GeometryTool(SpatialTool):
                 result = transform_points(points, arguments["matrix"])
                 valid = np.ones(len(result), dtype=bool)
             elif operation == "project_points":
-                camera = transform_points(points, np.linalg.inv(c2w))
+                camera = transform_points(
+                    points, invert_matrix(c2w, name="camera_to_world")
+                )
                 valid = camera[:, 2] > 0
                 result = np.full((len(camera), 2), np.nan)
                 projected = camera[valid] @ intrinsics.T
@@ -343,7 +363,7 @@ class GeometryTool(SpatialTool):
                     )
                 rays = (
                     np.column_stack((points, np.ones(len(points))))
-                    @ np.linalg.inv(intrinsics).T
+                    @ invert_matrix(intrinsics, name="intrinsics").T
                 )
                 result = transform_points(rays * depth[:, None], c2w)
                 valid = np.ones(len(result), dtype=bool)
@@ -445,11 +465,8 @@ class GeometryTool(SpatialTool):
             return self._three_dimensional(arguments)
         if operation == "point_distance" and len(arguments.get("first", ())) == 3:
             return self._three_dimensional(arguments)
-        frame_id = str(
-            arguments.get(
-                "source_frame_id", arguments.get("frame_id", "geometry:frame")
-            )
-        )
+        frame_id = _input_frame(arguments, "geometry:frame")
+        _check_operand_frames(arguments, frame_id)
         if "frame_id" in arguments and str(arguments["frame_id"]) != frame_id:
             raise ToolSchemaError("source_frame_id differs from declared frame_id")
         unit = str(arguments.get("source_unit", "pixel"))

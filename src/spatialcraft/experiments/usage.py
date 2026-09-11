@@ -225,8 +225,13 @@ class AuditedProviderV2(ModelProvider):
 
 
 class ScopedEmbedder:
-    def __init__(self, embedder, journal, scope):
+    def __init__(self, embedder, journal, scope, *, operation=None):
+        if operation is not None and (
+            not isinstance(operation, str) or not operation.strip()
+        ):
+            raise ValueError("Fixed embedding operation must be nonempty text")
         self.embedder, self.scope = embedder, scope
+        self.operation = operation
         self.identity, self.dimensions = embedder.identity, embedder.dimensions
         self.ledger = UsageLedger(journal.root)
 
@@ -234,9 +239,14 @@ class ScopedEmbedder:
         provider = self.embedder.provider
         before = dict(provider.usage)
         scope = dict(self.scope())
-        scope["operation"] = scope.get(
+        # A selector's embedding runs after its applicability callback returns.
+        # Bind its operation here, where the actual embedding is audited, without
+        # leaking metadata into a later executor request or cached-stage replay.
+        scope["operation"] = self.operation or scope.get(
             "embedding_operation", scope.get("operation", "embedding")
         )
+        if self.operation is not None:
+            scope["embedding_operation"] = self.operation
         started = perf_counter()
         try:
             values = self.embedder.embed(texts)
