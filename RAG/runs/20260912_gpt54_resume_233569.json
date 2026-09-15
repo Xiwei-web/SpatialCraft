@@ -1,0 +1,53 @@
+{
+  "job_id": "233569",
+  "resumes_job_id": "229347",
+  "recorded_at": "2026-09-12T19:21:10.199314+00:00",
+  "run_directory": "/l/users/xiwei.liu/spatialcraftLog/runs/gpt54_rag_medium16384_20260911_v1",
+  "batch_script": "/l/users/xiwei.liu/spatialcraftLog/runs/gpt54_rag_medium16384_20260911_v1/launcher_code/gpt54_medium16384.sbatch",
+  "model": "gpt-5.4",
+  "reasoning_effort": "medium",
+  "max_output_tokens": 16384,
+  "datasets": [
+    "robospatial",
+    "erqa",
+    "omni3d",
+    "sat"
+  ],
+  "settings_changed": false,
+  "resume_mode": "reuse_committed_journal_results",
+  "progress_before_resume": {
+    "robospatial": {
+      "deployment_completed": 175
+    },
+    "erqa": {
+      "deployment_completed": 200
+    },
+    "omni3d": {
+      "environment_completed": 795,
+      "environment_total": 1004
+    },
+    "sat": {
+      "environment_completed": 1,
+      "environment_total": 1200
+    }
+  },
+  "initial_scheduler_status": "RUNNING",
+  "node": "cn-06",
+  "related_job": {
+    "original_job_id": "229312",
+    "existing_resume_job_id": "232712",
+    "scheduler_status": "RUNNING",
+    "action": "preserved existing continuation; no duplicate submitted"
+  },
+  "validation_note": "Original frozen batch script inspected; scheduler has no other GPT-5.4 RAG writer. Original launcher enforces frozen-source verification and runtime journal integrity. Initial stdout/stderr empty; application-level progress not yet confirmed.",
+  "startup_check": {
+    "jobs": [
+      "232712",
+      "233569"
+    ],
+    "process": "RAG/freeze_run.py",
+    "wait_channel": "cl_sync_io_wait",
+    "application_progress_confirmed": false,
+    "note": "Both jobs are waiting for shared filesystem I/O during frozen-source verification; no model execution confirmed for these resumed jobs."
+  }
+}

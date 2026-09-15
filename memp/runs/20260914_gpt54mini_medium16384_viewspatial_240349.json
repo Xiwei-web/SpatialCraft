@@ -1,0 +1,71 @@
+{
+  "job_id": "240349",
+  "submitted_at": "2026-09-14T10:30:54.010778+00:00",
+  "script": "/home/xiwei.liu/spatialcraftRuns/memp_gpt54mini_medium16384_viewspatial_20260914_v1/job.sbatch",
+  "output": "/home/xiwei.liu/spatialcraftRuns/memp_gpt54mini_medium16384_viewspatial_20260914_v1",
+  "status": "submitted",
+  "observed_at": "2026-09-14T10:31:37.854590+00:00",
+  "observed_state": "PENDING",
+  "observed_reason": "Priority",
+  "model": "gpt-5.4-mini",
+  "reasoning_effort": "medium",
+  "max_output_tokens": 16384,
+  "datasets": [
+    "viewspatial"
+  ],
+  "counts": {
+    "viewspatial": {
+      "deployment": 2856,
+      "environment": 2856
+    }
+  },
+  "settings": {
+    "embedding_model": "text-embedding-3-large",
+    "environment_rollouts": 1,
+    "max_output_tokens": 16384,
+    "max_steps": 50,
+    "memory_format": "proceduralization",
+    "model": "gpt-5.4-mini",
+    "reasoning_effort": "medium",
+    "temperature": 0.0,
+    "top_k": 3
+  },
+  "effective_generation": {
+    "extra": {
+      "store": false
+    },
+    "logprobs": false,
+    "max_output_tokens": 16384,
+    "reasoning_effort": "medium",
+    "response_format": null,
+    "seed": null,
+    "stop": [],
+    "temperature": null,
+    "top_logprobs": null,
+    "top_p": null
+  },
+  "source_code_sha256": "86547e0f363a4043bf5f76efce60c6300d4dca046c127cc8a219e3ce785a5e8d",
+  "snapshot": "/home/xiwei.liu/spatialcraftSnapshots/memp_gpt54mini_medium16384_viewspatial_20260914_v1",
+  "split_preparation_path": "/l/users/xiwei.liu/spatialcraftLog/preparation/viewspatial_seed42_v1",
+  "split_protocol": {
+    "algorithm": "sorted categories; sorted task IDs; one Python random.Random(42); shuffle each category; odd remainders alternate environment first",
+    "category_key": "question_type",
+    "environment_fraction": 0.5,
+    "seed": 42,
+    "unit": "task_instance_not_unique_image"
+  },
+  "resources": {
+    "gpu": "1 x A100-SXM4-40GB",
+    "cpus": 8,
+    "memory": "64G",
+    "time_limit": "48h"
+  },
+  "validated_tests_from_identical_snapshot": 125,
+  "log_path": "/home/xiwei.liu/spatialcraftRuns/memp_gpt54mini_medium16384_viewspatial_20260914_v1/slurm-240349.out",
+  "recovery_budget": {
+    "reasoning_effort": "medium",
+    "max_output_tokens": 16384,
+    "temperature": "omitted",
+    "top_p": "omitted"
+  }
+}

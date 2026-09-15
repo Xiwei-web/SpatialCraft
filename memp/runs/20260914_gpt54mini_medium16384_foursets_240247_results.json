@@ -1,0 +1,98 @@
+{
+  "job_id": "240247",
+  "reported_at_utc": "2026-09-14T16:39:16.008834+00:00",
+  "completion_evidence": "results/all_summary.json status=completed; all 925 predictions match prepared task order",
+  "application_status": "completed",
+  "slurm_final_exit_status": "unavailable: sacct database connection refused; job absent from current queue",
+  "model": "gpt-5.4-mini",
+  "returned_model": "gpt-5.4-mini-2026-03-17",
+  "reasoning_effort": "medium",
+  "max_output_tokens": 16384,
+  "top_k": 3,
+  "memory_format": "proceduralization",
+  "datasets": [
+    {
+      "dataset": "robospatial",
+      "environment_correct": 103,
+      "environment_total": 175,
+      "memory_count": 103,
+      "deployment_correct": 112,
+      "deployment_total": 175,
+      "deployment_accuracy": 0.64,
+      "tool_calls": 47,
+      "model_calls": 222,
+      "completed_at_utc": "2026-09-14T10:37:31.272412+00:00"
+    },
+    {
+      "dataset": "erqa",
+      "environment_correct": 122,
+      "environment_total": 200,
+      "memory_count": 122,
+      "deployment_correct": 117,
+      "deployment_total": 200,
+      "deployment_accuracy": 0.585,
+      "tool_calls": 68,
+      "model_calls": 268,
+      "completed_at_utc": "2026-09-14T11:40:52.116934+00:00"
+    },
+    {
+      "dataset": "omni3d",
+      "environment_correct": 58,
+      "environment_total": 251,
+      "memory_count": 58,
+      "deployment_correct": 77,
+      "deployment_total": 250,
+      "deployment_accuracy": 0.308,
+      "tool_calls": 230,
+      "model_calls": 480,
+      "completed_at_utc": "2026-09-14T14:25:53.268882+00:00"
+    },
+    {
+      "dataset": "sat",
+      "environment_correct": 235,
+      "environment_total": 300,
+      "memory_count": 235,
+      "deployment_correct": 256,
+      "deployment_total": 300,
+      "deployment_accuracy": 0.8533333333333334,
+      "tool_calls": 36,
+      "model_calls": 336,
+      "completed_at_utc": "2026-09-14T15:52:07.196135+00:00"
+    }
+  ],
+  "deployment_correct": 562,
+  "deployment_total": 925,
+  "micro_accuracy": 0.6075675675675676,
+  "macro_accuracy": 0.5965833333333334,
+  "memory_count": 518,
+  "usage": {
+    "environment": {
+      "input_tokens": 7354792,
+      "output_tokens": 513139,
+      "reasoning_tokens": 472091,
+      "cached_input_tokens": 3857152
+    },
+    "script": {
+      "input_tokens": 173681,
+      "output_tokens": 479274,
+      "reasoning_tokens": 276773,
+      "cached_input_tokens": 0
+    },
+    "deployment": {
+      "input_tokens": 11477457,
+      "output_tokens": 528204,
+      "reasoning_tokens": 474952,
+      "cached_input_tokens": 5903232
+    }
+  },
+  "environment_failed_trajectories": [
+    {
+      "dataset": "robospatial",
+      "task_id": "task_robospatial_1e2797cd3352ed38c7e1a7f2",
+      "reason": "JSON output is not an action envelope",
+      "kind": "invalid action format; not an API transport error",
+      "included_in_memory": false
+    }
+  ],
+  "source_summary": "/home/xiwei.liu/spatialcraftRuns/memp_gpt54mini_medium16384_foursets_20260914_v1/results/all_summary.json"
+}

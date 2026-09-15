@@ -34,3 +34,7 @@
 - `validation/checks.json`：输入一致性和复用验证记录。
 
 项目入口 `RAG/gpt54_viewspatial_medium16384.sbatch`，提交副本在运行目录 `launcher_code/`；实际代码位于 `code_snapshot/`，不会受后续工作区源码修改影响。
+
+## 2026-09-12 续跑
+
+229405在环境阶段375次调用后失败。用户要求保留旧记录、剩余环境题从4次改为1次，已提交 **233606**；这是改变预算的独立续跑目录，详见 [233606说明](20260912_gpt54_viewspatial_remaining1.md)。

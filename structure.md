@@ -4,6 +4,8 @@
 
 本文用于让新对话中的 Agent 快速了解 SpatialCraft 的代码、空间工具和数据集位置。
 
+GPT-5.4 ViewSpatial RAG变更次数续跑（2026-09-12）：已提交 **233606**，继承229405的375条已完成环境输出（前93题各4次、第94题3次），剩余2762题各1次，最终计划3137条环境记录；测试2856题各1次。medium/16384、text-embedding-3-large/Top-3不变。新增`RAG/continuation.py`及`gpt54_viewspatial_remaining1_medium16384.sbatch`，严格校验原输入和结果后导入新journal。实际冻结版本40项离线回归通过；提交后RUNNING / cn-06，源码校验已通过，真实数据检查/导入尚待运行完成。共享存储读取阻塞期间，正式输出改放`/home/xiwei.liu/spatialcraftRuns/gpt54_rag_viewspatial_remaining1_medium16384_20260912_v1`，源码放共享home的`spatialcraftSnapshots/`；同名`/l/users/...`目录仅是未提交的准备目录。详见 [233606续跑说明](RAG/runs/20260912_gpt54_viewspatial_remaining1.md)。
+
 GPT-5.4 ViewSpatial RAG（2026-09-11）：已提交 **229405**，gpt-5.4 / medium / 单次16384 tokens，环境2856题×4次、测试2856题×1次，text-embedding-3-large / Top-3原始样例检索，独立从空库建库。与229312冻结代码和输入一致，输入/媒体校验通过，复用229347的GPT-5.4真实API验收。提交时 **PENDING / QOSMaxJobsPerUserLimit**，已有3项RAG任务运行，名额释放后由Slurm自动调度。独立运行 `spatialcraftLog/runs/gpt54_rag_viewspatial_medium16384_20260911_v1`；启动后日志 `slurm-229405.out`，最终accuracy `viewspatial/results/deployment.json`。详见 [GPT-5.4 ViewSpatial RAG运行说明](RAG/runs/20260911_viewspatial_gpt54_medium16384.md)。
 
 GPT-5.4 RAG（2026-09-11）：已提交 **229347**，与两个mini任务独立并行；gpt-5.4 / medium / 单次16384 tokens，环境每题4次、部署每题1次，Top-3原始样例检索。RoboSpatial、ERQA、Omni3D、SAT测试175/200/250/300题，执行源码及数据输入与229287一致，GPT-5.4独立从空库建库；真实GPT-5.4建库→embedding检索→多图部署API验收通过。运行 `spatialcraftLog/runs/gpt54_rag_medium16384_20260911_v1`；日志 `slurm-229347.out`，最终 `<dataset>/results/deployment.json` 及 `results/accuracy.md`。提交时PENDING，状态以Slurm为准。详见 [GPT-5.4 RAG运行说明](RAG/runs/20260911_gpt54_medium16384.md)。
@@ -62,7 +64,7 @@ Omni3D journal修复（2026-09-09）：**220630** 的GPU和27B推理验收通过
 
 其他重要目录：
 
-- `RAG/`：独立 GPT 示例检索 baseline；保存原始 task/output，经冻结任务向量索引检索，不调用 Experience/Skill 学习分支。入口为 `run_gpt54mini.sh`、`run_gpt54.sh`，详见第6节。
+- `RAG/`：独立 GPT 示例检索 baseline；保存原始 task/output，经冻结任务向量索引检索，不调用 Experience/Skill 学习分支。入口为 `run_gpt54mini.sh`、`run_gpt54.sh`，详见第6节。 `continuation.py`支持在新目录导入已完成前缀并减少剩余环境题的rollout次数；`tests/test_continuation.py`验证导入和恢复。
 - `configs/models/`：五个 backbone 配置，以及 `text-embedding-3-small.yaml`；Experience/Skill 共用 OpenAI embedding，不回退到 Qwen embedding。
 - `configs/experiments/qwen35_9b_spatialcraft.yaml`：1 pass、每题 4 rollouts；每 parent 6 条相关 trajectory 后演化、每 task 屏障最多 2 parents；trajectory/Skill 上限50/8 steps、单次/候选输出4096 tokens、thinking=false（instruct）；PPO直接评分action tokens；top3、候选3、容量100/20。
 - 补充确认：训练 top_p=0.9、部署/辅助构建 temperature=0、PPO epsilon=0.2 与严格正收益 margin=0、旧版本剩余轨迹仅存档；当前仅 `image_max_pixels=1048576` 仍待确认。

@@ -27,6 +27,7 @@ from spatialcraft.storage.atomic_io import (
     sha256_file,
 )
 
+from .continuation import import_prefix, rollout_counts
 from .core import (
     EMBEDDING_TEXT_POLICY,
     POLICY,
@@ -132,9 +133,10 @@ def collect_environment(journal, tasks, identity, config, options, embedder, pro
         load_memory(root, journal.binding_digest, embedder.identity)
         return read_json(root / "results/environment.json")
     records, usages = [], []
-    total = len(tasks) * options["environment_rollouts"]
+    counts = rollout_counts(len(tasks), options)
+    total = sum(counts)
     for task_index, task in enumerate(tasks):
-        for rollout_index in range(options["environment_rollouts"]):
+        for rollout_index in range(counts[task_index]):
             request = make_request(
                 task, config, stage="environment", rollout_index=rollout_index
             )
@@ -199,7 +201,7 @@ def collect_environment(journal, tasks, identity, config, options, embedder, pro
         "dataset": tasks[0].dataset,
         "status": "completed",
         "tasks": len(tasks),
-        "rollouts_per_task": options["environment_rollouts"],
+        "rollouts_per_task": counts[0] if len(set(counts)) == 1 else None,
         "model_calls": len(records),
         "record_count": len(records),
         "retrievable_tasks": len(selected),
@@ -208,6 +210,15 @@ def collect_environment(journal, tasks, identity, config, options, embedder, pro
         "correctness_filter": False,
         "environment_labels_used": False,
     }
+    if options.get("environment_resume"):
+        imported = options["environment_resume"]["completed_calls"]
+        report.update(
+            prior_model_calls=imported,
+            new_model_calls=total - imported,
+            remaining_task_rollouts=options["environment_rollouts"],
+            rollout_count_histogram=dict(Counter(counts)),
+            environment_resume=options["environment_resume"],
+        )
     immutable(root / "results/environment.json", canonical_json_bytes(report))
     # Snapshot is the final commit: deployment cannot use a partially built corpus.
     immutable(
@@ -372,6 +383,9 @@ def run_dataset(
         result = {"dataset": name}
         try:
             if stage in {"all", "environment"}:
+                import_prefix(
+                    journal, environment, identity, environment_config, options
+                )
                 result["environment"] = collect_environment(
                     journal,
                     environment,

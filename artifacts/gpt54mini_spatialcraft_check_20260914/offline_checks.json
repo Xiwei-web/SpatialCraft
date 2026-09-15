@@ -1,0 +1,88 @@
+{
+  "checked_at_utc": "2026-09-14T09:15:30.529672+00:00",
+  "git_head": "b69d7d7769d93b81d3e1a0c5b87ce6e704ebe0bf",
+  "scope": "offline diagnostics only; no API calls, GPU loading, Slurm submission, or runtime/source edits",
+  "all_confirmed": true,
+  "results": [
+    {
+      "name": "full_runtime_rejects_api_executor",
+      "exception_type": "ValueError",
+      "message": "This protocol runtime requires a local fixed-target executor; use the API baseline runner for API-only comparisons",
+      "confirmed": true
+    },
+    {
+      "name": "responses_provider_has_no_fixed_target_score",
+      "exception_type": "ModelCapabilityError",
+      "message": "OpenAIResponsesProvider does not implement fixed-target scoring",
+      "confirmed": true
+    },
+    {
+      "name": "v2_rejects_global_execution_thinking",
+      "exception_type": "ValueError",
+      "message": "v2 main executor uses instruct; knowledge operations have independent modes",
+      "confirmed": true
+    },
+    {
+      "name": "v2_rejects_operation_execution_thinking",
+      "exception_type": "ValueError",
+      "message": "Execution requires executor/Instruct and no knowledge JSON repair",
+      "confirmed": true
+    },
+    {
+      "name": "responses_payload_rejects_seed",
+      "exception_type": "ModelRequestError",
+      "message": "Responses API does not accept a seed parameter",
+      "confirmed": true
+    },
+    {
+      "name": "explicit_operations_override_top_level_16384",
+      "top_level": 16384,
+      "effective_execution_budgets": {
+        "execution.accumulation": 4096,
+        "execution.deployment": 4096,
+        "execution.fallback": 4096,
+        "execution.recovery": 1024,
+        "execution.forced_final": 512
+      },
+      "confirmed": true
+    },
+    {
+      "name": "ordinary_generation_payload_accepts_medium_16384",
+      "payload_fields": {
+        "model": "gpt-5.4-mini",
+        "reasoning": {
+          "effort": "medium"
+        },
+        "max_output_tokens": 16384
+      },
+      "confirmed": true,
+      "network_called": false
+    },
+    {
+      "name": "journal_failure_loses_exception_message",
+      "attempt": {
+        "attempt": 1,
+        "error_type": "RuntimeError",
+        "started_at": "2026-09-14T09:15:30.526108+00:00",
+        "status": "failed"
+      },
+      "confirmed": true
+    }
+  ],
+  "source_sha256": {
+    "src/spatialcraft/experiments/runtime.py": "0c1d6318b1b8e26ec597fc53c63513c488a16be8fc34e76636cd781ea7a5e074",
+    "src/spatialcraft/experiments/runtime_v2.py": "29ab9ec6b704e2a0c60c61893b8c9ff0407bea22915495281448f159939f176c",
+    "src/spatialcraft/experiments/run.py": "3de307b400dfecb481dcb34f39846d7ac557d39da12e2b2e192be81c532db9d7",
+    "src/spatialcraft/experiments/operation_profiles.py": "7c76b33b22c401ed57da01239f8cd1c4f08b356ef1c0f9e0873ddefb3a122cf2",
+    "src/spatialcraft/experiments/rollout.py": "dfe2196b83aaa6e1160c88309e8fbabd7b6122fece560da421a63f5f70a1d09b",
+    "src/spatialcraft/experiments/knowledge_generator.py": "101d7b2b336c0750fbe9af02c21e1b892a02b5441726a6bb70f9a6acbabccaa5",
+    "src/spatialcraft/experiments/journal.py": "b4003102658cf19bc1626fe03c7f156283082d1b349243d0bc2d7a4fd02783c2",
+    "src/spatialcraft/experiments/usage.py": "e56233f78eb2c5e88974677342057b463697addbda9cdef99f09f1e14b485375",
+    "src/spatialcraft/experiments/learning_v2.py": "cb88cb4a8e534439e5e027282a0ea3a10fd46cd99d1b0930232530e5504760c1",
+    "src/spatialcraft/knowledge/skill/learning_v2.py": "1fae69619834b9f28bc94f49274dbeebf7df427a1194d4473e647c1dfa45fa66",
+    "src/spatialcraft/models/interfaces.py": "e212d215e8fd08f2ce3c155b1203213271b131361e555b8576384717b3447a3b",
+    "src/spatialcraft/models/providers/openai_responses.py": "40cebcb890381e5bb269a6266467d34819d02365f9b831a6154e620d6e09e9a9",
+    "configs/models/gpt-5.4-mini.yaml": "38f12a2e0060400417d7b125e5ad15b200da19819b0da66d34d69df1c496623d",
+    "configs/experiments/qwen35_9b_spatialcraft_v2.yaml": "674ebe76c8bb390017e3e98ff27d0b38f968931b4ba31345b0202c56f9aa8457"
+  }
+}

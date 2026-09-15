@@ -16,6 +16,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "src"))
 
+from RAG.continuation import continuation_spec, rollout_counts
 from RAG.core import EMBEDDING_TEXT_POLICY, POLICY, PROMPT
 from RAG.data import prepare_inputs
 from RAG.runner import run_dataset
@@ -75,6 +76,16 @@ def parser():
         help="Total generation cap including reasoning tokens, per call in both stages",
     )
     value.add_argument("--environment-rollouts", type=int, default=4)
+    value.add_argument(
+        "--resume-environment-from",
+        type=Path,
+        help="Import a committed environment prefix into a NEW run",
+    )
+    value.add_argument(
+        "--resume-completed-calls",
+        type=int,
+        help="Exact number of original contiguous committed calls to retain",
+    )
     value.add_argument("--environment-temperature", type=float, default=0.7)
     value.add_argument("--top-k", type=int, default=3)
     value.add_argument(
@@ -150,6 +161,14 @@ def main(argv=None):
         "environment_temperature": environment.generation.temperature,
         "top_k": args.top_k,
     }
+    if (args.resume_environment_from is None) != (args.resume_completed_calls is None):
+        cli.error("Use both --resume-environment-from and --resume-completed-calls")
+    if args.resume_environment_from is not None:
+        if args.resume_environment_from.resolve() == args.output:
+            cli.error("Changed environment sampling requires a new output directory")
+        options["environment_resume"] = continuation_spec(
+            args.resume_environment_from, args.datasets, args.resume_completed_calls
+        )
     sources = {
         str(path.relative_to(PROJECT)): sha256_file(path)
         for folder in (PROJECT / "RAG", PROJECT / "src")
@@ -205,8 +224,9 @@ def main(argv=None):
             "counts": {
                 name: {
                     "environment_tasks": item["environment_count"],
-                    "environment_generation_calls": item["environment_count"]
-                    * args.environment_rollouts,
+                    "environment_generation_calls": sum(
+                        rollout_counts(item["environment_count"], options)
+                    ),
                     "deployment_tasks": item["count"],
                     "deployment_generation_calls": item["count"],
                 }
@@ -214,6 +234,12 @@ def main(argv=None):
             },
             "embedding_identity": embedder.identity,
         }
+        if options.get("environment_resume"):
+            for counts in report["counts"].values():
+                counts["reused_environment_calls"] = args.resume_completed_calls
+                counts["new_environment_generation_calls"] = (
+                    counts["environment_generation_calls"] - args.resume_completed_calls
+                )
         atomic_write_json(args.output / "preflight.json", report)
         print(json.dumps(report, ensure_ascii=False, indent=2), flush=True)
         if not args.execute:

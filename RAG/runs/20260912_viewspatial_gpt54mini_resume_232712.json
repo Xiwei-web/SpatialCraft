@@ -1,0 +1,19 @@
+{
+  "job_id": "232712",
+  "resumes_job_id": "229312",
+  "submitted_at": "2026-09-12T15:37:24.565903+00:00",
+  "run_directory": "/l/users/xiwei.liu/spatialcraftLog/runs/gpt54mini_rag_viewspatial_medium16384_20260911_v1",
+  "batch_script": "/l/users/xiwei.liu/spatialcraftLog/runs/gpt54mini_rag_viewspatial_medium16384_20260911_v1/launcher_code/gpt54mini_viewspatial_medium16384.sbatch",
+  "model": "gpt-5.4-mini",
+  "reasoning_effort": "medium",
+  "max_output_tokens": 16384,
+  "datasets": [
+    "viewspatial"
+  ],
+  "completed_environment_calls_before_resume": 6347,
+  "remaining_environment_calls": 5077,
+  "deployment_calls": 2856,
+  "settings_changed": false,
+  "resume_mode": "reuse_committed_journal_results",
+  "validation_note": "Existing configuration and final successful attempt confirmed; source and per-result integrity checks remain enforced by original launcher/runtime. Login-node full read checks stalled on shared filesystem and were stopped."
+}

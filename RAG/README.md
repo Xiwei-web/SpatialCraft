@@ -10,6 +10,8 @@ GPT-5.4四数据集同设定任务 **229347** 已独立提交，medium/16384、�
 
 GPT-5.4 ViewSpatial同设定任务 **229405** 已提交，medium/16384、固定2856/2856题；提交时因每用户并发上限排队，详见 [运行说明](runs/20260911_viewspatial_gpt54_medium16384.md)。
 
+GPT-5.4 ViewSpatial **233606**（2026-09-12）接续229405：保留375条记录，未开始的2762题改为各1次，测试2856题各1次；正式输出位于共享home，详见 [变更次数续跑说明](runs/20260912_gpt54_viewspatial_remaining1.md)。
+
 ## 方法和默认值
 
 这是独立的**单次视觉问答＋历史示例检索** baseline，不启用空间工具或 ReAct。项目已有 `rag_demonstrations` 是“验证成功的工具轨迹”变体，与本目录定义不同。
@@ -62,9 +64,12 @@ RAG/
 ├── data.py               # 固定划分、标签隔离、媒体校验
 ├── core.py               # 原始记录、任务向量检索、请求构造
 ├── runner.py             # 积累、冻结、部署、评分、断点记录
+├── continuation.py       # 校验并导入历史调用前缀，减少剩余题采样次数
 ├── freeze_run.py         # 冻结并核验包含RAG的完整执行源码
 ├── gpt54mini_medium16384.sbatch # 本次CPU正式任务入口
+├── gpt54_viewspatial_remaining1_medium16384.sbatch # 229405变更预算续跑
 ├── tests/test_rag.py      # 离线检索、隔离、恢复与参数回归
+├── tests/test_continuation.py # 前缀保留、拒绝损坏记录、减少次数与续跑回归
 └── README.md
 ```
 
@@ -121,3 +126,7 @@ bash RAG/run_gpt54mini.sh --output /l/users/xiwei.liu/spatialcraftLog/runs/gpt54
 相同命令、相同目录可恢复已提交的模型响应与embedding。远端请求成功但本地尚未提交时中断，请求可能重发。改变代码、模型、embedding、Top-k或环境采样设置时须用新目录。部署前后校验冻结库，拒绝混用其他配置或被修改的库。
 
 离线测试可在项目根目录运行 `PYTHONPATH=src:. pytest -q RAG/tests/test_rag.py`；测试使用 fake provider/embeddings，不调用真实 API。
+
+## 改变剩余环境次数的续跑
+
+同配置的续跑继续使用原目录即可。若要减少剩余题的采样次数，必须用新目录，并同时传入`--resume-environment-from ORIGINAL_RUN --resume-completed-calls N --environment-rollouts 1`。`N`表示精确连续的原journal已提交调用数；不依据准确率筛选。每题目标次数为“该题已有调用数”与新预算的较大值，因此既有多次输出全部保留，未开始的题采用新预算。原/新模型、数据、提示词、embedding等设置必须一致。详情和233606的实际配置见上面的续跑说明。
